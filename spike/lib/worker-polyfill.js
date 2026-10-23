@@ -38,8 +38,14 @@
     importCalls: [],
     sourceSizes: [],
     sources: [],
+    messages: [],
+    crypto: [],
+    ws: [],
   };
   window.__obscuraWorkerPolyfill = diag;
+
+  if (window.crypto && window.crypto.subtle) instrumentSubtle(window.crypto.subtle);
+  instrumentWebSocket();
 
   var resolved = new Map(); // absolute url -> source text with imports inlined
 
@@ -274,7 +280,114 @@
     };
   }
 
+  function instrumentSubtle(subtle) {
+    if (!subtle || subtle.__obscuraWrapped) return;
+    try {
+      subtle.__obscuraWrapped = true;
+    } catch (e) {
+      return;
+    }
+    var ops = ['digest', 'generateKey', 'importKey', 'exportKey', 'sign', 'verify',
+      'encrypt', 'decrypt', 'deriveKey', 'deriveBits', 'wrapKey', 'unwrapKey'];
+    for (var i = 0; i < ops.length; i++) {
+      (function (op) {
+        var orig = subtle[op];
+        if (typeof orig !== 'function') {
+          diag.crypto.push({ op: op, state: 'missing' });
+          return;
+        }
+        subtle[op] = function () {
+          var args = arguments;
+          var a0 = args[0];
+          var alg = typeof a0 === 'string' ? a0 : a0 && (a0.name || a0.hash || a0);
+          var rec = {
+            op: op,
+            alg: String(alg),
+            curve: a0 && a0.namedCurve ? String(a0.namedCurve) : null,
+          };
+          var push = function () {
+            if (diag.crypto.length < 120) diag.crypto.push(rec);
+          };
+          try {
+            var out = orig.apply(subtle, args);
+            if (out && typeof out.then === 'function') {
+              return out.then(
+                function (v) {
+                  rec.ok = true;
+                  push();
+                  return v;
+                },
+                function (e) {
+                  rec.ok = false;
+                  rec.err = String((e && e.message) || e);
+                  push();
+                  throw e;
+                },
+              );
+            }
+            rec.ok = true;
+            push();
+            return out;
+          } catch (e) {
+            rec.ok = false;
+            rec.err = String((e && e.message) || e);
+            push();
+            throw e;
+          }
+        };
+      })(ops[i]);
+    }
+  }
+
+  function instrumentWebSocket() {
+    var Native = window.WebSocket;
+    if (!Native || Native.__obscuraWrapped) return;
+    function WS(url, protocols) {
+      var ws = protocols === undefined ? new Native(url) : new Native(url, protocols);
+      var rec = { url: String(url), state: 'created' };
+      if (diag.ws.length < 20) diag.ws.push(rec);
+      try {
+        ws.addEventListener('open', function () {
+          rec.state = 'open';
+        });
+        ws.addEventListener('error', function () {
+          rec.state = 'error';
+        });
+        ws.addEventListener('close', function (e) {
+          rec.state = 'closed';
+          rec.code = e && e.code;
+          rec.reason = e && e.reason ? String(e.reason).slice(0, 80) : undefined;
+        });
+        ws.addEventListener('message', function () {
+          rec.messages = (rec.messages || 0) + 1;
+        });
+      } catch (e) {
+        /* listener attach failed */
+      }
+      return ws;
+    }
+    WS.prototype = Native.prototype;
+    WS.CONNECTING = 0;
+    WS.OPEN = 1;
+    WS.CLOSING = 2;
+    WS.CLOSED = 3;
+    WS.__obscuraWrapped = true;
+    try {
+      window.WebSocket = WS;
+    } catch (e) {
+      /* frozen */
+    }
+  }
+
   function makeScope(worker) {
+    // WhatsApp's worker bootstrap asserts `self instanceof
+    // DedicatedWorkerGlobalScope`; a plain object fails that check with
+    // "Minified invariant #56318". Give the scope the correct prototype chain.
+    function WorkerGlobalScope() {}
+    function DedicatedWorkerGlobalScope() {}
+    DedicatedWorkerGlobalScope.prototype = Object.create(WorkerGlobalScope.prototype);
+    DedicatedWorkerGlobalScope.prototype.constructor = DedicatedWorkerGlobalScope;
+
     var scope = {
       location: new URL(worker._url),
       origin: (function () {
@@ -327,8 +440,8 @@
       },
       onmessage: null,
       onmessageerror: null,
-      WorkerGlobalScope: function WorkerGlobalScope() {},
-      DedicatedWorkerGlobalScope: function DedicatedWorkerGlobalScope() {},
+      WorkerGlobalScope: WorkerGlobalScope,
+      DedicatedWorkerGlobalScope: DedicatedWorkerGlobalScope,
       crypto: window.crypto,
       Crypto: window.Crypto,
       TextEncoder: window.TextEncoder,
@@ -366,6 +479,7 @@
     };
     scope.self = scope;
     scope.globalThis = scope;
+    Object.setPrototypeOf(scope, DedicatedWorkerGlobalScope.prototype);
 
     // The bundle's module factory receives the worker global and reads
     // intrinsics as *properties* (e.g. `self.Promise.allSettled`), so a
@@ -487,8 +601,17 @@
     );
   };
 
+  function traceMsg(dir, data) {
+    if (diag.messages.length >= 400) return;
+    var type = 'non-object';
+    if (data && typeof data === 'object') type = String(data.type || '(untyped)');
+    else if (typeof data === 'string') type = 'string:' + data.slice(0, 24);
+    diag.messages.push({ dir: dir, type: type });
+  }
+
   WorkerPolyfill.prototype._deliver = function (msg) {
     var worker = this;
+    traceMsg('worker->page', msg);
     setTimeout(function () {
       if (worker._terminated) return;
       var scope = worker._scope;
@@ -523,6 +646,7 @@
 
   WorkerPolyfill.prototype.postMessage = function (data) {
     if (this._terminated) return;
+    traceMsg('page->worker', data);
     if (this._started) {
       this._deliver(data);
       return;

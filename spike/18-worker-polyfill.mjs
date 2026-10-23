@@ -220,6 +220,31 @@ try {
       .catch((e) => ({ probeError: String(e.message || e) }));
   }
 
+  out.instrument = await page
+    .evaluate(() => {
+      const d = window.__obscuraWorkerPolyfill;
+      if (!d) return null;
+      const cryptoCalls = d.crypto || [];
+      const cryptoSummary = {};
+      for (const c of cryptoCalls) {
+        const key = `${c.op} ${c.alg}${c.curve ? '/' + c.curve : ''} -> ${
+          c.err ? 'ERR: ' + c.err : c.state || 'ok'
+        }`;
+        cryptoSummary[key] = (cryptoSummary[key] || 0) + 1;
+      }
+      const msgCounts = {};
+      for (const m of d.messages || []) {
+        const k = `${m.dir} ${m.type}`;
+        msgCounts[k] = (msgCounts[k] || 0) + 1;
+      }
+      return {
+        crypto: Object.entries(cryptoSummary).map(([k, n]) => ({ k, n })),
+        ws: d.ws || [],
+        messages: Object.entries(msgCounts).map(([k, n]) => ({ k, n })),
+      };
+    })
+    .catch((e) => ({ probeError: String(e.message || e) }));
+
   out.rssMb = (await processTreeRss(server.child.pid)).totalMb;
 
   await page
@@ -244,6 +269,15 @@ try {
             .map(([k, v]) => `${k}=${v.status ?? v.error}`)
             .join(' ')}`
         : 'asset probe: not run',
+      `crypto: ${(out.instrument?.crypto || [])
+        .map((c) => `${c.n}x ${c.k}`)
+        .join(' | ')
+        .slice(0, 400)}`,
+      `ws: ${(out.instrument?.ws || []).map((w) => `${w.state} ${w.url.slice(0, 40)}`).join(' | ')}`,
+      `messages: ${(out.instrument?.messages || [])
+        .map((m) => `${m.n}x ${m.k}`)
+        .join(' | ')
+        .slice(0, 400)}`,
       `RSS: ${out.rssMb} MB`,
     ].join('\n'),
   );

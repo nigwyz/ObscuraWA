@@ -7,6 +7,9 @@ sessions/
 .wwebjs_auth/
 *.wwebjs_auth/
 
+# Vendored reference implementations - cloned locally for study, never published
+vendor/
+
 # Node
 node_modules/
 .pnpm-store/

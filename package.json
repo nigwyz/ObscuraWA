@@ -1,0 +1,44 @@
+{
+  "name": "obscurawa-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Milestone 0 feasibility spike: can a linked WhatsApp Web session survive on Obscura?",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "spike:00": "node spike/00-connect.mjs",
+    "spike:01": "node spike/01-boot.mjs",
+    "spike:02": "node spike/02-probe-apis.mjs",
+    "spike:03": "node spike/03-pair-send.mjs",
+    "spike:07": "node spike/07-chromium-baseline.mjs",
+    "spike:08": "node spike/08-binding-test.mjs",
+    "spike:09": "node spike/09-binding-context.mjs",
+    "spike:10": "node spike/10-session-serialization.mjs",
+    "spike:11": "node spike/11-deadlock-scope.mjs",
+    "spike:12": "node spike/12-page-driven-binding.mjs",
+    "spike:13": "node spike/13-ww-boot-blockers.mjs",
+    "spike:14": "node spike/14-persistence.mjs",
+    "spike:15": "node spike/15-baileys-baseline.mjs",
+    "spike:16": "node spike/16-chromium-globals.mjs",
+    "spike:17": "node spike/17-wweb-storage-footprint.mjs",
+    "spike:baseline": "node spike/07-chromium-baseline.mjs",
+    "spike:fallback": "node spike/15-baileys-baseline.mjs",
+    "spike:persistence": "node spike/14-persistence.mjs",
+    "spike:boot": "node spike/01-boot.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "puppeteer",
+      "@whiskeysockets/baileys",
+      "protobufjs"
+    ]
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "puppeteer-core": "25.16.0",
+    "qrcode-terminal": "0.12.0",
+    "whatsapp-web.js": "1.34.7"
+  }
+}

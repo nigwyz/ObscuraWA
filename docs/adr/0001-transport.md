@@ -1,10 +1,19 @@
 # ADR-0001: WhatsApp transport for DukkanAI
 
-- **Status:** Proposed (owner sign-off required to start M1)
+- **Status:** **Superseded 2026-10-24** by ADR-0002 (real QR) and ADR-0003 (backend architecture). Historical record only.
 - **Date:** 2026-10-23
 - **Milestone:** M0 — Obscura feasibility spike
 - **Supersedes:** nothing
 - **Evidence:** `results/` (gitignored, local), spike kit in `spike/`
+
+> **Superseded 2026-10-24.** The original No-Go decision is no longer current.
+> WhatsApp Web now boots to a real QR inside Obscura:
+> `43 → 350 → 363 → 698 → 37 → 93 → 66`. G1 is effectively **PASS** for the
+> QR path; G3 login is still **unverified**; G4/G5 still fail (IndexedDB is
+> in-memory); G6 improved to ~210–240 MB engine PSS but still misses 150 MB;
+> G7 remains unrun. See [ADR-0002](0002-real-qr-bridge.md) and
+> [ADR-0003](0003-backend-architecture.md). The gate results below are kept as
+> the historical evidence that motivated the work.
 
 ## Context
 

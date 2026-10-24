@@ -604,6 +604,8 @@
       __deviceInfoInstalled = true;
       rec('bridge.deviceInfo', 'installed');
       diag.patches.push('deviceInfo-bridge');
+      // Keep the registry for now: the bridge handler lazily resolves more
+      // modules after the first getDeviceInfo call.
     } catch (e) {
       var msg = String(e && (e.message || e));
       if (diag.deviceInfoError !== msg) {

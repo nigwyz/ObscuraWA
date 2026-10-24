@@ -30,6 +30,9 @@
   var diag = {
     version: 1,
     created: [],
+    createdMeta: [],
+    workerRegistry: Object.create(null),
+    reused: 0,
     inlined: [],
     misses: [],
     errors: [],
@@ -517,8 +520,18 @@
     return scope;
   }
 
-  function WorkerPolyfill(url) {
+  function WorkerPolyfill(url, options) {
     var worker = this;
+    this._name = (options && options.name) || '';
+    // WAWebStartBackendWorker retries the backend worker under the same name.
+    // Reuse a live instance so retries do not allocate a second V8 realm.
+    if (this._name) {
+      var existing = diag.workerRegistry[this._name];
+      if (existing && !existing._terminated) {
+        diag.reused += 1;
+        return existing;
+      }
+    }
     this.onmessage = null;
     this.onerror = null;
     this.onmessageerror = null;
@@ -532,6 +545,15 @@
     this._preparing = false;
     this._url = resolveUrl(url);
     diag.created.push(this._url);
+    if (this._name) diag.workerRegistry[this._name] = this;
+    if (diag.createdMeta.length < 20) {
+      diag.createdMeta.push({
+        url: this._url,
+        name: this._name,
+        type: (options && options.type) || 'classic',
+        stack: String(new Error().stack || '').slice(0, 700),
+      });
+    }
 
     var blobSource = window.__blobStore && window.__blobStore[String(url)];
     var blobIsWorkerScript = blobSource !== undefined && String(url).indexOf('blob:') === 0;
@@ -713,6 +735,9 @@
     this._terminated = true;
     this._pending.length = 0;
     this._scope = null;
+    if (this._name && diag.workerRegistry[this._name] === this) {
+      delete diag.workerRegistry[this._name];
+    }
   };
 
   WorkerPolyfill.prototype.addEventListener = function (type, fn) {

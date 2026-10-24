@@ -26,7 +26,7 @@ await rm(storageDir, { recursive: true, force: true });
 
 const workerSource = await readFile(new URL('./lib/worker-polyfill.js', import.meta.url), 'utf8');
 const wsShimSource = await readFile(new URL('./lib/ws-shim.js', import.meta.url), 'utf8');
-const bridgeSource = await readFile(new URL('./lib/wa-diag.js', import.meta.url), 'utf8');
+const bridgeSource = await readFile(new URL('./lib/wa-bridge.js', import.meta.url), 'utf8');
 
 const port = await freePort();
 const server = new ObscuraServer({ port, storageDir });

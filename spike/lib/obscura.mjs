@@ -76,11 +76,12 @@ export class ObscuraServer {
    * @param {string} [opts.logFile]
    * @param {string[]} [opts.extraArgs]
    */
-  constructor({ port, storageDir, logFile, extraArgs = [] }) {
+  constructor({ port, storageDir, logFile, extraArgs = [], globalArgs = [] }) {
     this.port = port;
     this.storageDir = storageDir;
     this.logFile = logFile;
     this.extraArgs = extraArgs;
+    this.globalArgs = globalArgs;
     this.child = null;
     this.logChunks = [];
     this.wsEndpoint = `ws://127.0.0.1:${this.port}`;
@@ -90,6 +91,7 @@ export class ObscuraServer {
     await mkdir(this.storageDir, { recursive: true });
     const readyFile = `${this.storageDir}/.ready-${randomBytes(4).toString('hex')}`;
     const args = [
+      ...this.globalArgs,
       'serve',
       '--port',
       String(this.port),

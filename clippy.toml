@@ -1,0 +1,3 @@
+# Keep clippy pragmatic until the workspace exists.
+too-many-arguments-threshold = 8
+type-complexity-threshold = 300

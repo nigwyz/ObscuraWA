@@ -1,85 +1,69 @@
-# Milestone 0 — Obscura feasibility spike
+# ObscuraWA spike
 
-Disposable code. Nothing here becomes product code. Its only output is
-evidence for `docs/ADR-0001-transport.md`.
+Current status: **real WhatsApp Web QR boot inside Obscura**. Login is not yet verified; session persistence, messaging, and the Rust facade are pending.
 
-**Result: No-Go on Obscura, commit to Baileys 6.7.24** — see the ADR for the
-gate matrix. Re-run the whole kit when upstream PR #1158 (persistent IndexedDB)
-merges and issue #827 (worker `importScripts`) closes.
+The old "No-Go / commit to Baileys" conclusion is superseded. See
+[ADR-0002](../docs/adr/0002-real-qr-bridge.md) and
+[ADR-0003](../docs/adr/0003-backend-architecture.md).
 
-## Question
+## Gate status
 
-Can a linked WhatsApp Web session on Obscura survive a restart well enough to
-run a multi-merchant SaaS connector?
+| # | Gate | Result |
+|---|---|---|
+| G1 | Boot to QR | **PASS** — real QR, `43 → 350 → 363 → 698 → 37 → 93 → 66` |
+| G2 | Browser APIs | **PASS with gaps** — public-key subtle is emulated by the page's JS curve25519 |
+| G3 | Pair + messaging | **PARTIAL** — QR works, login/pairing not verified |
+| G4 | Clean restart | **FAIL** — IndexedDB is in-memory |
+| G5 | Crash recovery | **FAIL** — IndexedDB is in-memory |
+| G6 | Density | **FAIL vs 150 MB** — engine ~210–240 MB PSS, total ~250–280 MB |
+| G7 | 24 h soak | **NOT RUN** — blocked by G3/G4 |
 
-## Gates
+## Active scripts
 
-| # | Gate | Pass condition | Result |
-|---|------|----------------|--------|
-| G1 | Boot | Authenticated shell or QR within 60 s, no fatal page errors | **FAIL** — document loads, no QR/`#pane-side` after 120 s |
-| G2 | Browser APIs | All critical probes in `02-probe-apis.mjs` pass | **PASS** — 1 gap (`crypto.subtle` ECDSA), +1 non-critical (SW `getRegistration`) |
-| G3 | Pair + messaging | Pair, inbound received, outbound acked | **FAIL** — adapter `initialize()` threw 4/4, 0 QR |
-| G4 | Clean restart | Same storage dir, no re-pair, READY < 60 s | **FAIL** — IndexedDB lost |
-| G5 | Crash recovery | `kill -9`, restart, no re-pair | **FAIL** — IndexedDB lost |
-| G6 | Density | ≤ 150 MB RSS/session and ≤ 50 % of Chromium | **FAIL** — 260 MB (Chromium 1 482 MB, Baileys 117 MB) |
-| G7 | Soak | 24 h, zero re-pairs, auto-reconnect after network drop | **NOT RUN** — blocked by G1/G3 |
+| Script | Purpose |
+|---|---|
+| `33-qr-live-cdp.mjs` | **Current live QR**: raw CDP, no Puppeteer, login detection, 30 s GC |
+| `34-qr-ui.mjs` | Local auto-refreshing QR page and `/status` API |
+| `32-qr-cdp.mjs` | One-shot raw CDP QR + PSS |
+| `31-cdp-smoke.mjs` | Raw CDP client smoke test |
+| `30-memory-profile.mjs` | Stage/PSS/GC/worker profiler |
+| `29-obscura-pss.mjs` | Obscura PSS baseline |
+| `28-chromium-pss.mjs` | Chrome/`whatsapp-web.js` PSS baseline |
+| `24-subtle-polyfill-gate.mjs` | X25519/Ed25519 polyfill correctness gate (not needed by WhatsApp) |
+| `18-worker-polyfill.mjs` | Diagnostics boot run with worker/page traces |
+| `lib/wa-bridge.js` | Production bridge resolver |
+| `lib/ws-bridge-raw.mjs` | Raw-CDP WebSocket bridge |
+| `lib/cdp-client.mjs` | Minimal CDP client |
+| `lib/memory-keeper.mjs` | Periodic low-memory GC |
 
-G4/G5 were expected to fail: Obscura documents IndexedDB as in-memory only and
-`--storage-dir` as cookies + localStorage only. WhatsApp Web keeps its session
-state in IndexedDB, so this spike proved that in practice rather than assuming
-it.
+## Baselines and diagnostics
+
+`07` Chromium/`whatsapp-web.js`; `15` Baileys; `22` Chromium WS frames; `26` Chromium worker init; `19` request headers; `23` crypto probe; `25` worker bundle probe.
+
+## Superseded
+
+- `27-qr-live.mjs` — Puppeteer live QR; use `33`.
+- `21-ws-tunnel.mjs` — older tunnel; use `lib/ws-bridge-raw.mjs`.
+- `20-websocket-probe.mjs` — historical proof the native WS stub drops data.
 
 ## Running
 
 ```bash
 pnpm install
 
-# No phone needed
-pnpm spike:00     # CDP connect + exposeFunction round-trip
-pnpm spike:01     # boot web.whatsapp.com (G1)
-pnpm spike:02     # browser API battery (G2)
-pnpm spike:07     # Chromium reference: whatsapp-web.js to QR (G6 baseline)
-pnpm spike:15     # Baileys fallback: QR + RSS (G6 comparison)
-
-# Diagnostics — event channel and boot blockers
-pnpm spike:08     # exposeFunction primitives over raw CDP
-pnpm spike:09     # bindingCalled executionContextId vs puppeteer's filter
-pnpm spike:10     # per-session command serialization (the deadlock)
-pnpm spike:11     # deadlock scope: session vs connection
-pnpm spike:12     # whatsapp-web.js's real event pattern (6/6 PASS)
-pnpm spike:13     # why WhatsApp Web does not boot on Obscura
-pnpm spike:16     # Chromium control: globals + worker capabilities
-pnpm spike:17     # where WhatsApp stores its state on disk
-
-# Restart survival (G4/G5) — the decisive gate
-pnpm spike:persistence
-
-# Phone needed (only after G1 passes): re-evaluation entry point
-SPIKE_PAIR=1 pnpm spike:03     # pair + optional SPIKE_SEND_TO=<number@s.whatsapp.net>
+KEEPALIVE_MS=1800000 node spike/33-qr-live-cdp.mjs
+UI_PORT=8787 node spike/34-qr-ui.mjs
+# http://127.0.0.1:8787/
 ```
 
-Results land in `results/` (gitignored). Set `OBSCURA_BIN` to override the
-engine binary path; `SPIKE_VERBOSE=1` mirrors engine logs to stderr;
-`SPIKE_WATCH=1` in `03` adds a second-connection page watcher (off by default
-because a second connection changes context lifetimes).
+`OBSCURA_BIN` overrides the engine binary. `SPIKE_VERBOSE=1` mirrors engine logs.
 
-## Notes for whoever re-runs this
+## Notes
 
-- **One OS process per session.** `--storage-dir` is per `obscura serve`
-  process; cookies + localStorage only.
-- **No secrets in logs or `results/`.** The QR payload is printed to the
-  terminal only. `sessions/`, `.wwebjs_auth/`, `results/` and `.env` are
-  gitignored.
-- **Engine tuning.** WhatsApp Web is a heavy SPA: set
-  `OBSCURA_SCRIPT_DEADLINE_MS=60000` (default 30 s cap) and
-  `OBSCURA_MODULE_BUDGET_MS=15000` before spawning.
-- **CDP serialization.** Obscura serves CDP commands one at a time *per
-  session*. Never, from the host, await a promise that only the host can
-  settle (deadlock — see `10`/`11`). whatsapp-web.js never does this; see
-  `12`.
-- **whatsapp-web.js against an external endpoint** needs
-  `authStrategy: new NoAuth()` (`LocalAuth` injects `userDataDir`, which
-  `puppeteer.connect` ignores) and `webVersionCache: { type: 'none' }` to
-  test against the live site.
-- **WhatsApp blocks unrecognized/headless UAs** — it serves a stripped legacy
-  page. Use a mainstream Chrome UA (see `16`).
+- **One OS process per session.** `--storage-dir` is per `obscura serve`; cookies + localStorage only.
+- **No secrets in logs or `results/`.** QR payloads are never written by the QR path. `sessions/`, `results/`, `vendor/`, and `.env` are gitignored.
+- **CDP serialization.** Obscura serves CDP commands one at a time per session. Never await a host binding from inside a `Runtime.evaluate` that the host itself must settle.
+- **UA.** WhatsApp serves a stripped legacy page to unrecognized/headless UAs; use a mainstream Chrome UA.
+- **Engine tuning.** `OBSCURA_SCRIPT_DEADLINE_MS=60000`, `OBSCURA_MODULE_BUDGET_MS=15000`.
+- **Periodic GC.** V8 grows at idle; call `HeapProfiler.collectGarbage` every 30 s. See `docs/operations/memory.md`.
+- **IDB.** In-memory, 64 MB cap, lost on restart. This is the persistence blocker.

@@ -19,3 +19,21 @@ dist/
 .env
 .env.*
 *.key
+
+# Rust
+target/
+
+# Build/coverage artifacts
+coverage/
+*.profraw
+
+# Local QR captures
+qr*.png
+
+# Extra secrets / certs
+*.pem
+*.p12
+*.pfx
+
+# OS
+.DS_Store

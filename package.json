@@ -26,7 +26,12 @@
     "spike:baseline": "node spike/07-chromium-baseline.mjs",
     "spike:fallback": "node spike/15-baileys-baseline.mjs",
     "spike:persistence": "node spike/14-persistence.mjs",
-    "spike:boot": "node spike/01-boot.mjs"
+    "spike:boot": "node spike/01-boot.mjs",
+    "spike:qr": "node spike/33-qr-live-cdp.mjs",
+    "spike:ui": "node spike/34-qr-ui.mjs",
+    "spike:memory": "node spike/30-memory-profile.mjs",
+    "spike:pss": "node spike/29-obscura-pss.mjs",
+    "check": "find spike -type f \\( -name '*.mjs' -o -name '*.js' \\) -print0 | xargs -0 -n1 node --check"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

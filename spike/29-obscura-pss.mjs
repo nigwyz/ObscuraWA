@@ -97,6 +97,12 @@ try {
   }
   if (!state.hasQr && !state.hasPaneSide) throw new Error('no QR within 45s');
 
+  // V8 keeps the post-boot garbage until pressure; one explicit low-memory
+  // notification drops ~25-30 MB without touching the page.
+  const cdp = await page.createCDPSession();
+  await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
+  await new Promise((r) => setTimeout(r, 1000));
+
   const enginePid = server.child.pid;
   const sample = async (label) => {
     const total = await memTree(process.pid);

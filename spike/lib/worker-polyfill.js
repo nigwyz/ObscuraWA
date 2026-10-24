@@ -546,6 +546,11 @@
     this._url = resolveUrl(url);
     diag.created.push(this._url);
     if (this._name) diag.workerRegistry[this._name] = this;
+    if (Array.isArray(window.__obscuraNoWorkers) && this._name && window.__obscuraNoWorkers.indexOf(this._name) >= 0) {
+      this._noop = true;
+      this._source = '';
+      return;
+    }
     if (diag.createdMeta.length < 20) {
       diag.createdMeta.push({
         url: this._url,
@@ -694,7 +699,7 @@
   };
 
   WorkerPolyfill.prototype.postMessage = function (data, transfer) {
-    if (this._terminated) return;
+    if (this._terminated || this._noop) return;
     traceMsg('page->worker', data);
     if (data && typeof data === 'object') {
       diag.posts = diag.posts || [];

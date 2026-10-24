@@ -39,7 +39,15 @@ async function memTree(rootPid) {
       const rss = status.match(/^VmRSS:\s+(\d+) kB/m);
       const rollup = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8');
       const pss = rollup.match(/^Pss:\s+(\d+) kB/m);
-      byPid.set(pid, { ppid, rssKb: rss ? Number(rss[1]) : 0, pssKb: pss ? Number(pss[1]) : 0 });
+      const pssAnon = rollup.match(/^Pss_Anon:\s+(\d+) kB/m);
+      const pssFile = rollup.match(/^Pss_File:\s+(\d+) kB/m);
+      byPid.set(pid, {
+        ppid,
+        rssKb: rss ? Number(rss[1]) : 0,
+        pssKb: pss ? Number(pss[1]) : 0,
+        pssAnonKb: pssAnon ? Number(pssAnon[1]) : 0,
+        pssFileKb: pssFile ? Number(pssFile[1]) : 0,
+      });
     } catch {
       /* gone */
     }
@@ -57,11 +65,37 @@ async function memTree(rootPid) {
   }
   let rssKb = 0;
   let pssKb = 0;
+  let pssAnonKb = 0;
+  let pssFileKb = 0;
   for (const pid of tree) {
     rssKb += byPid.get(pid)?.rssKb ?? 0;
     pssKb += byPid.get(pid)?.pssKb ?? 0;
+    pssAnonKb += byPid.get(pid)?.pssAnonKb ?? 0;
+    pssFileKb += byPid.get(pid)?.pssFileKb ?? 0;
   }
-  return { rssMb: Math.round(rssKb / 1024), pssMb: Math.round(pssKb / 1024) };
+  return {
+    rssMb: Math.round(rssKb / 1024),
+    pssMb: Math.round(pssKb / 1024),
+    pssAnonMb: Math.round(pssAnonKb / 1024),
+    pssFileMb: Math.round(pssFileKb / 1024),
+  };
+}
+
+async function topMappings(pid, limit = 25) {
+  const text = await readFile(`/proc/${pid}/smaps`, 'utf8');
+  const blocks = text.split(/\n(?=[0-9a-f]+-)/);
+  const rows = [];
+  for (const b of blocks) {
+    const head = b.split('\n')[0];
+    const pss = b.match(/^Pss:\s+(\d+) kB/m);
+    if (!pss) continue;
+    rows.push({ map: head.slice(0, 140), pssKb: Number(pss[1]) });
+  }
+  rows.sort((a, b) => b.pssKb - a.pssKb);
+  return rows.filter((r) => r.pssKb > 0).slice(0, limit).map((r) => ({
+    map: r.map,
+    pssMb: Math.round((r.pssKb / 1024) * 10) / 10,
+  }));
 }
 
 const out = { script: '30-memory-profile', label, v8Flags, samples: [] };
@@ -84,11 +118,22 @@ try {
   );
 
   const bridge = await installWsBridge(page);
+  const noWorkers = (process.env.PROFILE_NO_WORKERS ?? '').split(',').filter(Boolean);
+  await page.evaluateOnNewDocument(
+    'window.__obscuraNoWorkers = ' + JSON.stringify(noWorkers) + ';',
+  );
   await page.evaluateOnNewDocument(wsShimSource);
   await page.evaluateOnNewDocument(workerSource);
   await page.evaluateOnNewDocument(bridgeSource);
 
   const cdp = await page.createCDPSession();
+  const blocked = (process.env.PROFILE_BLOCK ?? '').split(',').filter(Boolean);
+  if (blocked.length) {
+    await cdp.send('Network.enable').catch(() => {});
+    await cdp.send('Network.setBlockedURLs', { urls: blocked }).catch((e) => {
+      out.blockError = String(e.message || e);
+    });
+  }
 
   // Engine + empty browsing context baseline, before WhatsApp loads.
   const preNav = await (async () => {
@@ -100,10 +145,13 @@ try {
       name: 'pre-nav',
       engineRssMb: engine.rssMb,
       enginePssMb: engine.pssMb,
+      enginePssAnonMb: engine.pssAnonMb,
+      enginePssFileMb: engine.pssFileMb,
       totalPssMb: total.pssMb,
       controllerPssMb: total.pssMb - engine.pssMb,
       heapUsedMb: heap ? Math.round(heap.usedSize / 1024 / 1024) : null,
       heapTotalMb: heap ? Math.round(heap.totalSize / 1024 / 1024) : null,
+      heapExternalMb: heap && heap.backingStorageSize != null ? Math.round(heap.backingStorageSize / 1024 / 1024) : null,
       workers: 0,
       domNodes: 0,
     };
@@ -155,10 +203,13 @@ try {
       atMs: Date.now() - qrAt,
       engineRssMb: engine.rssMb,
       enginePssMb: engine.pssMb,
+      enginePssAnonMb: engine.pssAnonMb,
+      enginePssFileMb: engine.pssFileMb,
       totalPssMb: total.pssMb,
       controllerPssMb: total.pssMb - engine.pssMb,
       heapUsedMb: heap ? Math.round(heap.usedSize / 1024 / 1024) : null,
       heapTotalMb: heap ? Math.round(heap.totalSize / 1024 / 1024) : null,
+      heapExternalMb: heap && heap.backingStorageSize != null ? Math.round(heap.backingStorageSize / 1024 / 1024) : null,
       heapError,
       ...pageStats,
     };
@@ -166,7 +217,8 @@ try {
     return entry;
   };
 
-  await sample('qr');
+  const qrSample = await sample('qr');
+  out.mappings = await topMappings(server.child.pid, 30).catch(() => null);
   await new Promise((r) => setTimeout(r, 10_000));
   await sample('qr+10s');
   try {

@@ -63,6 +63,10 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
     stats.recent.push({ t: Date.now(), dir, len: buf.length, b0: buf.length ? buf[0] : null });
     if (stats.recent.length > 200) stats.recent.shift();
   };
+  const recordEvent = (dir, extra) => {
+    stats.recent.push({ t: Date.now(), dir, ...extra });
+    if (stats.recent.length > 200) stats.recent.shift();
+  };
   const log = (...a) => { if (verbose) console.error('[ws-raw]', ...a); };
 
   const evalPage = (expression) => cdp.evaluate(sessionId, expression).catch((e) => log('eval', e.message));
@@ -127,6 +131,7 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
         rec.state = 'error';
         stats.errors++;
         log(`error ${id}: ${msg}`);
+        recordEvent('error', { id, message: msg });
         evalPage(`window.__obscuraWsResolveOpen(${JSON.stringify(id)}, false, ${JSON.stringify(msg)})`);
         push(id, { t: 'error', m: msg });
       });
@@ -134,6 +139,7 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
         rec.state = 'closed';
         stats.closed++;
         log(`close ${id} ${code}`);
+        recordEvent('close', { id, code, reason: String(reason || '').slice(0, 120) });
         push(id, { t: 'close', c: code, r: String(reason || '') });
       });
       return;

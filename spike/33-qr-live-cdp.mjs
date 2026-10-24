@@ -105,9 +105,14 @@ try {
   await cdp.addScript(sessionId, bridgeSource);
 
   cdp.on('Runtime.exceptionThrown', (p) => {
-    if ((out.exceptions ||= []).length < 10) {
+    if ((out.exceptions ||= []).length < 40) {
       out.exceptions.push((p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || '').slice(0, 300));
     }
+  });
+  cdp.on('Runtime.consoleAPICalled', (p) => {
+    if (p.type !== 'error' && p.type !== 'warning') return;
+    const text = (p.args || []).map((a) => a.value ?? a.description ?? '').join(' ').slice(0, 300);
+    if ((out.consoleErrors ||= []).length < 60) out.consoleErrors.push({ type: p.type, text });
   });
 
   await cdp.navigate(sessionId, 'https://web.whatsapp.com/');
@@ -145,6 +150,7 @@ try {
 
   const t0 = Date.now();
   let lastSave = 0;
+  let lastDiag = 0;
   let authLogged = false;
   while (Date.now() - t0 < KEEPALIVE_MS) {
     state = await cdp.evaluate(sessionId, stateExpr).catch(() => ({}));
@@ -152,8 +158,31 @@ try {
     await writeFile(WS_STATE, JSON.stringify({ at: Date.now(), stats: bridge.stats })).catch(() => {});
     if (state.authenticated && !authLogged) {
       authLogged = true;
+      const png = await cdp.screenshot(sessionId).catch(() => null);
+      if (png) await writeFile('/tmp/ObscuraWA-auth.png', png);
       await writeFile('/tmp/ObscuraWA-status.txt', 'authenticated\n');
       console.log('authenticated; waiting for the chat list');
+    }
+    if (Date.now() - lastDiag > 2000) {
+      lastDiag = Date.now();
+      const worker = await cdp.evaluate(sessionId, `(() => {
+        const d = window.__obscuraWorkerPolyfill;
+        if (!d) return null;
+        return {
+          created: d.createdMeta,
+          errors: d.errors,
+          rejections: d.rejections,
+          messages: d.messages,
+          posts: d.posts,
+          hrp: d.hrp,
+        };
+      })()`).catch(() => null);
+      await writeFile('/tmp/ObscuraWA-worker.json', JSON.stringify({ at: Date.now(), worker })).catch(() => {});
+      await writeFile('/tmp/ObscuraWA-console.json', JSON.stringify({
+        at: Date.now(),
+        exceptions: out.exceptions || [],
+        consoleErrors: out.consoleErrors || [],
+      })).catch(() => {});
     }
     if (state.ready) {
       const png = await cdp.screenshot(sessionId).catch(() => null);

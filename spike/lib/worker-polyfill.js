@@ -41,8 +41,17 @@
     messages: [],
     crypto: [],
     ws: [],
+    rejections: [],
   };
   window.__obscuraWorkerPolyfill = diag;
+
+  // Async socket handlers reject without throwing, so sync try/catch never sees
+  // them; this is where a stalled Noise handshake would surface.
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    var text = r && (r.stack || r.message) ? r.stack || r.message : String(r);
+    if (diag.rejections.length < 20) diag.rejections.push(String(text).slice(0, 600));
+  });
 
   if (window.crypto && window.crypto.subtle) instrumentSubtle(window.crypto.subtle);
   instrumentWebSocket();
@@ -418,8 +427,8 @@
           throw new Error('importScripts: not prefetched: ' + missing.join(', '));
         }
       },
-      postMessage: function (msg) {
-        worker._deliver(msg);
+      postMessage: function (msg, transfer) {
+        worker._postToPage(msg, transfer);
       },
       addEventListener: function (type, fn) {
         if (!worker._ev[type]) worker._ev[type] = [];
@@ -513,7 +522,8 @@
     this.onmessage = null;
     this.onerror = null;
     this.onmessageerror = null;
-    this._ev = Object.create(null);
+    this._ev = Object.create(null);      // worker-scope listeners
+    this._pageEv = Object.create(null);  // page-side listeners
     this._terminated = false;
     this._scope = null;
     this._pending = [];
@@ -569,7 +579,7 @@
       this._scope = scope;
       this._started = true;
       var pending = this._pending.splice(0);
-      for (var i = 0; i < pending.length; i++) this.postMessage(pending[i]);
+      for (var i = 0; i < pending.length; i++) this.postMessage(pending[i].data, pending[i].transfer);
     } catch (e) {
       diag.errors.push(String(e && e.stack ? e.stack : e && e.message ? e.message : e));
       this._emitError(e);
@@ -609,18 +619,35 @@
     diag.messages.push({ dir: dir, type: type });
   }
 
-  WorkerPolyfill.prototype._deliver = function (msg) {
+  WorkerPolyfill.prototype._deliver = function (msg, transfer) {
     var worker = this;
-    traceMsg('worker->page', msg);
+    traceMsg('page->worker', msg);
     setTimeout(function () {
       if (worker._terminated) return;
       var scope = worker._scope;
       if (!scope) return;
-      var evt = { data: msg, type: 'message' };
+      var evt = { data: msg, type: 'message', ports: Array.isArray(transfer) ? transfer : [] };
       try {
         if (typeof scope.onmessage === 'function') scope.onmessage.call(scope, evt);
         var ls = worker._ev.message || [];
         for (var i = 0; i < ls.length; i++) ls[i].call(scope, evt);
+      } catch (e) {
+        diag.errors.push(String(e && e.stack ? e.stack : e && e.message ? e.message : e));
+        worker._emitError(e);
+      }
+    }, 0);
+  };
+
+  WorkerPolyfill.prototype._postToPage = function (msg, transfer) {
+    var worker = this;
+    traceMsg('worker->page', msg);
+    setTimeout(function () {
+      if (worker._terminated) return;
+      var evt = { data: msg, type: 'message', ports: Array.isArray(transfer) ? transfer : [] };
+      try {
+        if (typeof worker.onmessage === 'function') worker.onmessage.call(worker, evt);
+        var ls = worker._pageEv.message || [];
+        for (var i = 0; i < ls.length; i++) ls[i].call(worker, evt);
       } catch (e) {
         diag.errors.push(String(e && e.stack ? e.stack : e && e.message ? e.message : e));
         worker._emitError(e);
@@ -644,14 +671,39 @@
     }
   };
 
-  WorkerPolyfill.prototype.postMessage = function (data) {
+  WorkerPolyfill.prototype.postMessage = function (data, transfer) {
     if (this._terminated) return;
     traceMsg('page->worker', data);
+    if (data && typeof data === 'object') {
+      diag.posts = diag.posts || [];
+      if (diag.posts.length < 80) {
+        diag.posts.push({ type: String(data.type || '(untyped)'), keys: Object.keys(data).slice(0, 12) });
+      }
+    }
+    if (data && data.type === 'ww-hrp-init' && data.hrp) {
+      try {
+        var hrp = data.hrp || {};
+        var hsrp = hrp.hsrp || {};
+        var map = (hsrp.hblp && hsrp.hblp.rsrcMap) || {};
+        var keys = Object.keys(map);
+        diag.hrp = {
+          keys: keys.slice(0, 40),
+          backend: map.WAWebBackendWorkerV2Bundle || null,
+          resources: keys.slice(0, 12).map(function (k) {
+            var r = map[k] || {};
+            return { k: k, type: r.type, src: r.src };
+          }),
+          tiered: hrp.tieredResources || null,
+        };
+      } catch (e) {
+        diag.errors.push('hrp capture: ' + String(e && e.message ? e.message : e));
+      }
+    }
     if (this._started) {
-      this._deliver(data);
+      this._deliver(data, transfer);
       return;
     }
-    this._pending.push(data);
+    this._pending.push({ data: data, transfer: transfer });
     if (data && typeof data === 'object' && data.type === 'sr-init' && typeof data.bundleUrl === 'string') {
       this._prepareBundle(data.bundleUrl);
     }

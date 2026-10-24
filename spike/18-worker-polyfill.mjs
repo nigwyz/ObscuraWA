@@ -27,17 +27,27 @@ import {
   processTreeRss,
   saveResult,
 } from './lib/obscura.mjs';
+import { installWsBridge } from './lib/ws-bridge.mjs';
 
 process.env.OBSCURA_SCRIPT_DEADLINE_MS ??= '60000';
 process.env.OBSCURA_MODULE_BUDGET_MS ??= '15000';
 
 const control = process.argv.includes('--control');
+// Shorter default poll keeps diagnostic iterations inside tool time limits.
+const BOOT_MS = Number(process.env.SPIKE_BOOT_MS ?? 75_000);
 const label = control ? '18-control' : '18-worker-polyfill';
 const resultsDir = new URL('../results/', import.meta.url).pathname;
 await mkdir(resultsDir, { recursive: true });
 
 const polyfillPath = new URL('./lib/worker-polyfill.js', import.meta.url).pathname;
 const polyfillSource = await readFile(polyfillPath, 'utf8');
+const wsShimSource = await readFile(new URL('./lib/ws-shim.js', import.meta.url).pathname, 'utf8');
+// Obscura's subtle is symmetric-only; WhatsApp's Noise handshake needs X25519.
+// noble first (defines __obscuraNoble), then the wrapper, then the worker
+// prelude so its crypto instrumentation records the polyfilled calls too.
+const nobleSource = await readFile(new URL('./lib/noble-bundle.js', import.meta.url).pathname, 'utf8');
+const subtleSource = await readFile(new URL('./lib/subtle-polyfill.js', import.meta.url).pathname, 'utf8');
+const waDiagSource = await readFile(new URL('./lib/wa-diag.js', import.meta.url).pathname, 'utf8');
 
 const storageDir = `${resultsDir}storage-${label}`;
 const out = {
@@ -45,6 +55,8 @@ const out = {
   control,
   startedAt: new Date().toISOString(),
   console: [],
+  requests: [],
+  responses: [],
 };
 
 const race = (promise, ms, tag) =>
@@ -64,7 +76,14 @@ try {
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
   );
 
+  // The tunnel is installed for every run: without it the page has no socket
+  // at all, so "control" would only re-test the stub.
+  const bridge = await installWsBridge(page);
+  await page.evaluateOnNewDocument(wsShimSource);
   if (!control) {
+    await page.evaluateOnNewDocument(waDiagSource);
+    await page.evaluateOnNewDocument(nobleSource);
+    await page.evaluateOnNewDocument(subtleSource);
     await page.evaluateOnNewDocument(polyfillSource);
   }
 
@@ -75,6 +94,17 @@ try {
   });
   page.on('pageerror', (err) => {
     (out.pageErrors ??= []).push(String(err.message || err).slice(0, 400));
+  });
+  page.on('request', (req) => {
+    const url = req.url();
+    if (out.requests.length < 300) {
+      const entry = { url, type: req.resourceType() };
+      if (/worker_module|init_script|webworker_v4/.test(url)) entry.headers = req.headers();
+      out.requests.push(entry);
+    }
+  });
+  page.on('response', (res) => {
+    if (out.responses.length < 300) out.responses.push({ url: res.url(), status: res.status() });
   });
   page.on('requestfailed', (req) => {
     if ((out.requestFailed ??= []).length < 40) {
@@ -99,7 +129,7 @@ try {
   let snap = {};
   const boot = await race(
     (async () => {
-      const deadline = Date.now() + 120_000;
+      const deadline = Date.now() + BOOT_MS;
       while (Date.now() < deadline) {
         snap = await page.evaluate(() => {
           const qr =
@@ -116,6 +146,9 @@ try {
             imgCount: document.querySelectorAll('img').length,
             dataRef: document.querySelector('[data-ref]')?.getAttribute('data-ref') ?? null,
             scanText: (document.body?.innerText ?? '').includes('Scan to log in'),
+            wsReceived: window.__obscuraWsShim?.received ?? 0,
+            wsSent: window.__obscuraWsShim?.sent ?? 0,
+            wsReady: (window.__obscuraWsShim?.created ?? []).length,
             title: document.title,
             polyfill: window.__obscuraWorkerPolyfill
               ? {
@@ -160,11 +193,20 @@ try {
         errors: d.errors.slice(0, 40),
         htmlSources: d.htmlSources.slice(0, 20),
         statuses: (d.statuses || []).slice(0, 40),
+        rejections: (d.rejections || []).slice(0, 10),
+        hrp: d.hrp || null,
+        defines: (d.defines || []).slice(0, 300),
+        handlerDeps: d.handlerDeps || null,
+        handlerFactory: d.handlerFactory || null,
+        posts: (d.posts || []).slice(0, 60),
+        messages: (d.messages || []).slice(0, 60),
         importCalls: (d.importCalls || []).slice(0, 20),
         sourceSizes: (d.sourceSizes || []).slice(0, 20),
       };
     })
     .catch((e) => ({ probeError: String(e.message || e) }));
+
+  out.waDiag = await page.evaluate(() => window.__waDiag ?? null).catch(() => null);
 
   // The worker script is fetched by the prelude itself, so a failure here is
   // the engine's HTTP stack, not WhatsApp's boot logic. Re-fetch it under
@@ -245,6 +287,26 @@ try {
     })
     .catch((e) => ({ probeError: String(e.message || e) }));
 
+  out.wsShim = await page
+    .evaluate(() => {
+      const d = window.__obscuraWsShim;
+      if (!d) return null;
+      return {
+        created: d.created,
+        sent: d.sent,
+        sentBytes: d.sentBytes,
+        received: d.received,
+        receivedBytes: d.receivedBytes,
+        maxFrame: d.maxFrame,
+        errors: d.errors.slice(0, 20),
+        closes: (d.closes || []).slice(0, 30),
+        frames: (d.frames || []).slice(0, 40),
+        attempts: (d.attempts || []).slice(0, 30),
+        dropped: (d.dropped || []).slice(0, 20),
+      };
+    })
+    .catch((e) => ({ probeError: String(e.message || e) }));
+
   out.rssMb = (await processTreeRss(server.child.pid)).totalMb;
 
   await page
@@ -278,10 +340,14 @@ try {
         .map((m) => `${m.n}x ${m.k}`)
         .join(' | ')
         .slice(0, 400)}`,
+      `ws: sent=${out.wsShim?.sent ?? 0} recv=${out.wsShim?.received ?? 0} bytesIn=${out.wsShim?.receivedBytes ?? 0} maxFrame=${out.wsShim?.maxFrame ?? 0} errors=${JSON.stringify(
+        out.wsShim?.errors ?? [],
+      )}`,
       `RSS: ${out.rssMb} MB`,
     ].join('\n'),
   );
 
+  await bridge.dispose();
   await browser.disconnect();
 } catch (err) {
   out.ok = false;

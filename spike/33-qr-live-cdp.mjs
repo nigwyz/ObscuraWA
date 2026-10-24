@@ -78,6 +78,11 @@ const stateExpr = `(() => {
     authenticated: authenticated,
     ready: ready,
     hasPaneSide: !!document.querySelector('#pane-side'),
+    bridgeStatus: window.__waBridgeStatus || null,
+    bridgeErrors: (window.__waBridgeErrors || []).slice(0, 4),
+    namespaces: (window.__waBridge && window.__waBridge.getHandledNamespaces)
+      ? window.__waBridge.getHandledNamespaces()
+      : null,
     title: document.title,
     text: text.slice(0, 240),
   };
@@ -144,6 +149,14 @@ try {
     startMemoryKeeper(cdp, { intervalMs: 30_000, delayMs: 5_000 });
   }
 
+  if (process.env.SPIKE_FULL_BRIDGE !== '0') {
+    const full = await cdp.evaluate(
+      sessionId,
+      'window.__waInstallFullBridge ? window.__waInstallFullBridge() : "missing"',
+    ).catch((e) => `eval-error: ${e.message}`);
+    console.log('full bridge:', full);
+  }
+
   const engineAtQr = await memTree(server.child.pid);
   const totalAtQr = await memTree(process.pid);
   console.log(`QR engine PSS ${engineAtQr.pssMb} MB | controller ${totalAtQr.pssMb - engineAtQr.pssMb} MB | total ${totalAtQr.pssMb} MB`);
@@ -158,6 +171,11 @@ try {
     await writeFile(WS_STATE, JSON.stringify({ at: Date.now(), stats: bridge.stats })).catch(() => {});
     if (state.authenticated && !authLogged) {
       authLogged = true;
+      const full = await cdp.evaluate(
+        sessionId,
+        'window.__waInstallFullBridge ? window.__waInstallFullBridge() : "missing"',
+      ).catch((e) => `eval-error: ${e.message}`);
+      console.log('full bridge retry:', full);
       const png = await cdp.screenshot(sessionId).catch(() => null);
       if (png) await writeFile('/tmp/ObscuraWA-auth.png', png);
       await writeFile('/tmp/ObscuraWA-status.txt', 'authenticated\n');

@@ -133,6 +133,31 @@
     }
   }
 
+  function installFullBridgeNow() {
+    if (!window.__waBridge) return 'no-bridge';
+    try {
+      var full = requireLocal('WAWebSetFrontendHandlerApi');
+      if (!full || typeof full.setFrontendHandlers !== 'function') return 'no-aggregator';
+      try {
+        full.setFrontendHandlers(window.__waBridge);
+      } catch (e) {
+        note(e);
+      }
+      var hasEvent =
+        typeof window.__waBridge.hasHandlerForNamespace === 'function' &&
+        window.__waBridge.hasHandlerForNamespace('event');
+      if (hasEvent) {
+        window.__waBridgeStatus = 'full';
+        return 'full';
+      }
+      return 'no-event';
+    } catch (e) {
+      note(e);
+      return 'error';
+    }
+  }
+  window.__waInstallFullBridge = installFullBridgeNow;
+
   var apiDone = false;
   function wrapSetApi() {
     if (apiDone || typeof window.require !== 'function') return;

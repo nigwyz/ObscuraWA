@@ -63,22 +63,29 @@ const page = `<!doctype html>
   const login = document.getElementById('login');
   const wsLine = document.getElementById('ws');
   let lastMtime = 0;
-  let authenticated = false;
+  let done = false;
 
   async function refresh() {
-    if (authenticated) return;
+    if (done) return;
     try {
       const r = await fetch('/status?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
-      if (r.authenticated) {
-        authenticated = true;
+      if (r.ready) {
+        done = true;
+        document.getElementById('card').classList.add('ok');
+        title.textContent = 'Ready';
+        sub.textContent = 'Chats are loaded.';
+        statusEl.textContent = 'ready';
+        dot.className = 'dot ok';
+      } else if (r.authenticated) {
         document.getElementById('card').classList.add('ok');
         title.textContent = 'Logged in';
-        sub.textContent = 'This device is now linked.';
+        sub.textContent = 'Waiting for chats to load…';
         statusEl.textContent = 'authenticated';
         dot.className = 'dot ok';
+      }
+      if ((r.ready || r.authenticated) && r.login) {
         login.src = '/login.png?t=' + Date.now();
         login.style.display = 'block';
-        return;
       }
       if (r.ws && r.ws.stats) {
         wsLine.textContent = 'ws in ' + r.ws.stats.received + ' / out ' + r.ws.stats.sent;
@@ -125,13 +132,16 @@ const server = createServer(async (req, res) => {
       try { const s = await stat(QR); qr = true; mtime = Math.round(s.mtimeMs); } catch { /* none */ }
       try { statusText = (await readFile(STATUS, 'utf8')).trim(); } catch { /* none */ }
       expired = statusText === 'qr-expired';
-      const authenticated = statusText === 'authenticated';
+      const ready = statusText === 'ready';
+      const authenticated = statusText === 'authenticated' || ready;
+      let login = false;
+      try { await stat(LOGIN); login = true; } catch { /* none */ }
       let pageState = null;
       try { pageState = JSON.parse(await readFile('/tmp/ObscuraWA-state.json', 'utf8')); } catch { /* none */ }
       let ws = null;
       try { ws = JSON.parse(await readFile('/tmp/ObscuraWA-ws.json', 'utf8')); } catch { /* none */ }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ qr, mtime, expired, authenticated, statusText, pageState, ws }));
+      res.end(JSON.stringify({ qr, mtime, expired, authenticated, ready, login, statusText, pageState, ws }));
       return;
     }
     res.writeHead(404); res.end('not found');

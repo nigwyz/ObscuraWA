@@ -55,7 +55,14 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
 
   const sockets = new Map();
   const pendingPolls = new Set();
-  const stats = { opened: 0, closed: 0, sent: 0, sentBytes: 0, received: 0, receivedBytes: 0, errors: 0 };
+  const stats = {
+    opened: 0, closed: 0, sent: 0, sentBytes: 0, received: 0, receivedBytes: 0, errors: 0,
+    recent: [],
+  };
+  const record = (dir, buf) => {
+    stats.recent.push({ t: Date.now(), dir, len: buf.length, b0: buf.length ? buf[0] : null });
+    if (stats.recent.length > 200) stats.recent.shift();
+  };
   const log = (...a) => { if (verbose) console.error('[ws-raw]', ...a); };
 
   const evalPage = (expression) => cdp.evaluate(sessionId, expression).catch((e) => log('eval', e.message));
@@ -112,6 +119,7 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
         rec.receivedBytes += buf.length;
         stats.received++;
         stats.receivedBytes += buf.length;
+        record('in', buf);
         push(id, { t: 'message', b: buf.toString('base64') });
       });
       ws.on('error', (err) => {
@@ -157,6 +165,7 @@ export async function installWsBridgeRaw(cdp, sessionId, { maxQueue = 8192, verb
         rec.sentBytes += buf.length;
         stats.sent++;
         stats.sentBytes += buf.length;
+        record('out', buf);
       } catch { stats.errors++; }
       return;
     }

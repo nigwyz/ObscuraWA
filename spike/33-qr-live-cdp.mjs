@@ -15,6 +15,7 @@ process.env.OBSCURA_MODULE_BUDGET_MS ??= '15000';
 
 const KEEPALIVE_MS = Number(process.env.KEEPALIVE_MS ?? 300_000);
 const QR_PATH = process.env.QR_PATH ?? '/tmp/ObscuraWA-qr-live.png';
+const WS_STATE = '/tmp/ObscuraWA-ws.json';
 const LOGIN_PATH = process.env.LOGIN_PATH ?? '/tmp/ObscuraWA-logged-in.png';
 const resultsDir = new URL('../results/', import.meta.url).pathname;
 const storageDir = `${resultsDir}storage-33`;
@@ -63,11 +64,20 @@ let cdp;
 
 const stateExpr = `(() => {
   const qr = document.querySelector('div[data-testid="qrcode"]') || document.querySelector('canvas');
+  const r = qr ? qr.getBoundingClientRect() : null;
+  const qrVisible = !!(r && r.width > 10 && r.height > 10);
+  const text = document.body?.innerText || '';
+  const scan = text.includes('Scan to log in');
+  const chatList = !!document.querySelector('#side, #pane-side, [data-testid="chat-list"], div[aria-label="Chat list"]');
+  const loggedIn = !qrVisible && !scan && (chatList || /Loading your chats|Chats|Search/.test(text));
   return {
-    hasQr: !!qr,
+    hasQr: qrVisible,
+    scan: scan,
+    chatList: chatList,
+    loggedIn: loggedIn,
     hasPaneSide: !!document.querySelector('#pane-side'),
-    scan: (document.body?.innerText || '').includes('Scan to log in'),
     title: document.title,
+    text: text.slice(0, 240),
   };
 })()`;
 
@@ -104,10 +114,10 @@ try {
   let state = {};
   while (Date.now() < deadline) {
     state = await cdp.evaluate(sessionId, stateExpr).catch(() => ({}));
-    if (state.hasQr || state.hasPaneSide) break;
+    if (state.hasQr || state.loggedIn) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  if (!state.hasQr && !state.hasPaneSide) throw new Error('no QR within 45s');
+  if (!state.hasQr && !state.loggedIn) throw new Error('no QR within 45s');
 
   const saveQr = async () => {
     const box = await cdp.evaluate(sessionId, boxExpr).catch(() => null);
@@ -119,7 +129,8 @@ try {
     return true;
   };
 
-  if (!state.hasPaneSide) {
+  await writeFile(WS_STATE, JSON.stringify({ at: Date.now(), stats: bridge.stats })).catch(() => {});
+  if (!state.loggedIn) {
     await saveQr();
     await writeFile('/tmp/ObscuraWA-status.txt', 'qr-live\n');
     console.log(`QR live: ${QR_PATH}`);
@@ -134,7 +145,9 @@ try {
   let lastSave = 0;
   while (Date.now() - t0 < KEEPALIVE_MS) {
     state = await cdp.evaluate(sessionId, stateExpr).catch(() => ({}));
-    if (state.hasPaneSide) {
+    await writeFile('/tmp/ObscuraWA-state.json', JSON.stringify({ at: Date.now(), state })).catch(() => {});
+    await writeFile(WS_STATE, JSON.stringify({ at: Date.now(), stats: bridge.stats })).catch(() => {});
+    if (state.loggedIn) {
       const png = await cdp.screenshot(sessionId).catch(() => null);
       if (png) await writeFile(LOGIN_PATH, png);
       await writeFile('/tmp/ObscuraWA-status.txt', 'authenticated\n');
@@ -149,7 +162,7 @@ try {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  if (!state.hasPaneSide) {
+  if (!state.loggedIn) {
     await writeFile('/tmp/ObscuraWA-status.txt', 'qr-expired\n');
     console.log('keepalive ended without login');
   }

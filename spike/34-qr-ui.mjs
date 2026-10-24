@@ -46,6 +46,7 @@ const page = `<!doctype html>
   <p id="sub">WhatsApp → Settings → Linked devices → Link a device</p>
   <div class="qrwrap"><img id="qr" alt="WhatsApp QR code"></div>
   <div class="pill"><span class="dot" id="dot"></span><span id="status">waiting for QR…</span></div>
+  <div id="ws" style="margin-top:8px;font:11px ui-monospace,monospace;color:#5f6f78">ws in 0 / out 0</div>
   <div class="steps">
     <div><b>1.</b> Open WhatsApp on your phone</div>
     <div><b>2.</b> Tap <b>Linked devices</b> → <b>Link a device</b></div>
@@ -60,6 +61,7 @@ const page = `<!doctype html>
   const title = document.getElementById('title');
   const sub = document.getElementById('sub');
   const login = document.getElementById('login');
+  const wsLine = document.getElementById('ws');
   let lastMtime = 0;
   let authenticated = false;
 
@@ -77,6 +79,9 @@ const page = `<!doctype html>
         login.src = '/login.png?t=' + Date.now();
         login.style.display = 'block';
         return;
+      }
+      if (r.ws && r.ws.stats) {
+        wsLine.textContent = 'ws in ' + r.ws.stats.received + ' / out ' + r.ws.stats.sent;
       }
       if (r.qr && r.mtime !== lastMtime) {
         const next = new Image();
@@ -121,8 +126,12 @@ const server = createServer(async (req, res) => {
       try { statusText = (await readFile(STATUS, 'utf8')).trim(); } catch { /* none */ }
       expired = statusText === 'qr-expired';
       const authenticated = statusText === 'authenticated';
+      let pageState = null;
+      try { pageState = JSON.parse(await readFile('/tmp/ObscuraWA-state.json', 'utf8')); } catch { /* none */ }
+      let ws = null;
+      try { ws = JSON.parse(await readFile('/tmp/ObscuraWA-ws.json', 'utf8')); } catch { /* none */ }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ qr, mtime, expired, authenticated, statusText }));
+      res.end(JSON.stringify({ qr, mtime, expired, authenticated, statusText, pageState, ws }));
       return;
     }
     res.writeHead(404); res.end('not found');

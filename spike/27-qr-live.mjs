@@ -12,6 +12,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import puppeteer from 'puppeteer-core';
 import { ObscuraServer, connectPuppeteer, freePort } from './lib/obscura.mjs';
 import { installWsBridge } from './lib/ws-bridge.mjs';
+import { startMemoryKeeper } from './lib/memory-keeper.mjs';
 
 process.env.OBSCURA_SCRIPT_DEADLINE_MS ??= '60000';
 process.env.OBSCURA_MODULE_BUDGET_MS ??= '15000';
@@ -107,13 +108,12 @@ try {
     console.log('already authenticated');
   } else {
     await saveQr(page);
-    await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
+    startMemoryKeeper(cdp, { intervalMs: 30_000, delayMs: 5_000 });
     console.log(`QR live: ${QR_PATH}`);
   }
 
   const t0 = Date.now();
   let lastSave = 0;
-  let lastGc = Date.now();
   while (Date.now() - t0 < KEEPALIVE_MS) {
     state = await snap(page);
     if (state.hasPaneSide) {
@@ -125,10 +125,7 @@ try {
     if (state.hasQr && Date.now() - lastSave > 2000) {
       if (await saveQr(page)) lastSave = Date.now();
     }
-    if (Date.now() - lastGc > 60_000) {
-      await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
-      lastGc = Date.now();
-    }
+
     await new Promise((r) => setTimeout(r, 500));
   }
   if (!state?.hasPaneSide) {

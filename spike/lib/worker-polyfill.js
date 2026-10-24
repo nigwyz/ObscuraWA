@@ -197,7 +197,7 @@
     }
 
     diag.sourceSizes.push({ url: abs, bytes: text.length });
-    if (diag.sources.length < 4 && text.length < 200000) {
+    if (window.__obscuraWorkerDebugSources && diag.sources.length < 4 && text.length < 200000) {
       diag.sources.push({ url: abs, text: text });
     }
     resolved.set(abs, text);
@@ -604,6 +604,8 @@
       var fn = new Function('scope', 'source', 'with (scope) { eval(source); }');
       fn.call(scope, scope, this._source);
       this._scope = scope;
+      // The compiled script lives on; the source string does not need to.
+      this._source = null;
       this._started = true;
       var pending = this._pending.splice(0);
       for (var i = 0; i < pending.length; i++) this.postMessage(pending[i].data, pending[i].transfer);

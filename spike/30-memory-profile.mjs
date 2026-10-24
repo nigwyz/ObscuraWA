@@ -10,6 +10,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import puppeteer from 'puppeteer-core';
 import { ObscuraServer, connectPuppeteer, freePort, saveResult } from './lib/obscura.mjs';
 import { installWsBridge } from './lib/ws-bridge.mjs';
+import { startMemoryKeeper } from './lib/memory-keeper.mjs';
 
 process.env.OBSCURA_SCRIPT_DEADLINE_MS ??= '60000';
 process.env.OBSCURA_MODULE_BUDGET_MS ??= '15000';
@@ -219,8 +220,25 @@ try {
 
   const qrSample = await sample('qr');
   out.mappings = await topMappings(server.child.pid, 30).catch(() => null);
-  await new Promise((r) => setTimeout(r, 10_000));
-  await sample('qr+10s');
+
+  let keeper = null;
+  if (process.env.PROFILE_GC_INTERVAL_MS) {
+    keeper = startMemoryKeeper(cdp, {
+      intervalMs: Number(process.env.PROFILE_GC_INTERVAL_MS),
+      delayMs: 0,
+    });
+  }
+
+  const idleMs = Number(process.env.PROFILE_IDLE_MS ?? 10_000);
+  const checkpoints = [10_000, 30_000, 60_000, 120_000].filter((t) => t <= idleMs);
+  let elapsed = 0;
+  for (const t of checkpoints) {
+    await new Promise((r) => setTimeout(r, t - elapsed));
+    elapsed = t;
+    await sample(t === 10_000 ? 'qr+10s' : `qr+${Math.round(t / 1000)}s`);
+  }
+  if (!checkpoints.length) await new Promise((r) => setTimeout(r, idleMs));
+  if (keeper) keeper.stop();
   try {
     await cdp.send('HeapProfiler.collectGarbage');
   } catch (e) {

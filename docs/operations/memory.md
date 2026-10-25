@@ -17,6 +17,19 @@
 
 `whatsapp-web.js` summed RSS is 1,482 MB; PSS is the fair number.
 
+## Rust controller
+
+Single run at QR against the patched engine (2026-10-26), same method:
+
+| Stack | Engine PSS | Controller PSS | Total PSS |
+|---|---:|---:|---:|
+| Rust `obsurawa` + patched Obscura | 225.6 MB | 16.8 MB | **~242 MB** |
+
+The Rust controller replaces the Node controller and removes its runtime; it is
+~14–23 MB smaller than the raw-CDP Node controller. This is one sample, not a
+median; engine PSS varies by 20–30 MB between runs. The patched engine is a
+local `0.1.0-dev` build, so compare it to the stock 0.2.5 numbers with care.
+
 ## Where the engine memory goes
 
 | Region | Size |
@@ -41,6 +54,7 @@
 | Block images/fonts | no measurable win |
 | Block WASM | not worthwhile; only a tiny feature detect |
 | Puppeteer → raw CDP | controller 66 → 30–40 MB |
+| Node raw CDP → Rust controller | controller 30–40 → ~17 MB |
 
 ## Current policy
 

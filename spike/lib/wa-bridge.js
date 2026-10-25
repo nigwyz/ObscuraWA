@@ -94,6 +94,25 @@
         }
       })(stubs[i][0], stubs[i][1]);
     }
+    try {
+      window.__d(
+        'WAWebBizBroadcastMarketingCampaignNotificationEmitter',
+        [],
+        function (t, n, r, o, a, i2, l) {
+          l.marketingCampaignNotificationEmitter = {
+            registerDefaultHandler: function () {},
+            unregisterDefaultHandler: function () {},
+            on: function () {},
+            off: function () {},
+            addListener: function () {},
+            removeListener: function () {},
+          };
+        },
+        98,
+      );
+    } catch (e) {
+      note(e);
+    }
     stubsDone = true;
   }
 

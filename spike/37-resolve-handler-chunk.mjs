@@ -60,12 +60,12 @@ function parseDocument(html) {
 }
 
 async function downloadAll(entries) {
-  const found = [];
+  const chunks = [];
   let next = 0;
   let done = 0;
 
   async function worker() {
-    while (next < entries.length && !found.length) {
+    while (next < entries.length) {
       const entry = entries[next++];
       try {
         const res = await fetch(entry.url, {
@@ -74,9 +74,14 @@ async function downloadAll(entries) {
         if (!res.ok) continue;
         const text = await res.text();
         done++;
-        if (text.includes('__d("WAWebSetFrontendHandlerApi"')) {
-          found.push({ ...entry, text });
+        const defines = new Map();
+        const re = /__d\("([^"]+)",\[([^\]]*)\]/g;
+        let match;
+        while ((match = re.exec(text))) {
+          const deps = [...match[2].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+          defines.set(match[1], deps);
         }
+        chunks.push({ ...entry, text, defines });
       } catch {
         /* skip failed asset */
       }
@@ -84,7 +89,34 @@ async function downloadAll(entries) {
   }
 
   await Promise.all(Array.from({ length: 24 }, worker));
-  return { found, done };
+  return { chunks, done };
+}
+
+function selectClosure(chunks, root) {
+  const byName = new Map();
+  for (const chunk of chunks) {
+    for (const name of chunk.defines.keys()) {
+      if (!byName.has(name)) byName.set(name, chunk);
+    }
+  }
+  const rootChunk = byName.get(root);
+  if (!rootChunk) return null;
+
+  const selected = new Map();
+  const seen = new Set();
+  const queue = [root];
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const chunk = byName.get(name);
+    if (!chunk) continue;
+    selected.set(chunk.url, chunk);
+    for (const dependency of chunk.defines.get(name) || []) {
+      queue.push(dependency);
+    }
+  }
+  return { rootChunk, selected: [...selected.values()] };
 }
 
 try {
@@ -127,17 +159,47 @@ try {
   out.jsResources = parsed.urls.length;
   if (!parsed.urls.length) throw new Error('no Bootloader rsrcMap JS resources');
 
-  const { found, done } = await downloadAll(parsed.urls);
+  const { chunks, done } = await downloadAll(parsed.urls);
   out.downloaded = done;
-  if (!found.length) throw new Error('handler chunk not found in rsrcMap resources');
 
-  const match = found[0];
-  out.hash = match.hash;
-  out.p = match.p;
-  out.url = match.url;
-  out.bytes = match.text.length;
+  let ordered;
+  if (process.env.HANDLER_CLOSURE === '1') {
+    const closure = selectClosure(chunks, 'WAWebSetFrontendHandlerApi');
+    if (!closure) throw new Error('handler module not found in rsrcMap resources');
+    out.mode = 'closure';
+    const rootUrl = closure.rootChunk.url;
+    ordered = [...closure.selected].sort((a, b) => {
+      const aRoot = a.url === rootUrl ? 1 : 0;
+      const bRoot = b.url === rootUrl ? 1 : 0;
+      return aRoot - bRoot;
+    });
+  } else {
+    const root = chunks.find((chunk) => chunk.defines.has('WAWebSetFrontendHandlerApi'));
+    if (!root) throw new Error('handler module not found in rsrcMap resources');
+    const largest = chunks
+      .filter((chunk) => chunk !== root)
+      .sort((a, b) => b.text.length - a.text.length)[0];
+    if (!largest) throw new Error('no dependency bundle found');
+    out.mode = 'handler+largest';
+    ordered = [largest, root];
+  }
 
-  await writeFile(`${resultsDir}handler-chunk.js`, match.text);
+  const combined = ordered.map((chunk) => chunk.text).join('\n');
+
+  const rootChunk = ordered[ordered.length - 1];
+  out.hash = rootChunk.hash;
+  out.p = rootChunk.p;
+  out.url = rootChunk.url;
+  out.bytes = combined.length;
+  out.modules = ordered.reduce((total, chunk) => total + chunk.defines.size, 0);
+  out.chunks = ordered.map((chunk) => ({
+    hash: chunk.hash,
+    url: chunk.url,
+    bytes: chunk.text.length,
+    modules: chunk.defines.size,
+  }));
+
+  await writeFile(`${resultsDir}handler-chunk.js`, combined);
   await writeFile(
     `${resultsDir}handler-chunk.json`,
     `${JSON.stringify(
@@ -147,6 +209,8 @@ try {
         p: out.p,
         url: out.url,
         bytes: out.bytes,
+        modules: out.modules,
+        chunks: out.chunks,
         fetchedAt: new Date().toISOString(),
       },
       null,
@@ -159,7 +223,10 @@ try {
       `doc: ${out.docBytes} bytes, build ${out.build ?? 'unknown'}`,
       `rsrcMap JS: ${out.jsResources}, downloaded ${out.downloaded}`,
       `handler: ${out.hash} ${out.bytes} bytes`,
-      `url: ${out.url}`,
+      `closure: ${out.chunks.length} chunks, ${out.modules} modules`,
+      ...out.chunks.map(
+        (chunk) => `  ${chunk.hash} ${chunk.bytes} bytes (${chunk.modules} modules)`,
+      ),
       `cached: ${resultsDir}handler-chunk.js`,
     ].join('\n'),
   );

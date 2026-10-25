@@ -4,7 +4,7 @@
  * No Puppeteer. Refreshes /tmp/ObscuraWA-qr-live.png every 2 s, GC every 30 s,
  * exits on login or keepalive expiry.
  */
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { ObscuraServer, freePort } from './lib/obscura.mjs';
 import { connectCdp } from './lib/cdp-client.mjs';
 import { installWsBridgeRaw, WS_ADAPTER } from './lib/ws-bridge-raw.mjs';
@@ -28,7 +28,16 @@ const workerSource = await readFile(new URL('./lib/worker-polyfill.js', import.m
 const wsShimSource = await readFile(new URL('./lib/ws-shim.js', import.meta.url), 'utf8');
 const bridgeSource = await readFile(new URL('./lib/wa-bridge.js', import.meta.url), 'utf8');
 const handlerChunkFile = process.env.HANDLER_CHUNK_FILE;
-const handlerChunkSource = handlerChunkFile ? await readFile(handlerChunkFile, 'utf8') : null;
+const cachedChunkFile = `${resultsDir}handler-chunk.js`;
+let handlerChunkSource = null;
+if (handlerChunkFile) {
+  handlerChunkSource = await readFile(handlerChunkFile, 'utf8');
+} else {
+  const cached = await access(cachedChunkFile)
+    .then(() => cachedChunkFile)
+    .catch(() => null);
+  if (cached) handlerChunkSource = await readFile(cached, 'utf8');
+}
 
 async function memTree(rootPid) {
   const { readdir } = await import('node:fs/promises');

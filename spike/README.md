@@ -66,6 +66,6 @@ UI_PORT=8787 node spike/34-qr-ui.mjs
 - **UA.** WhatsApp serves a stripped legacy page to unrecognized/headless UAs; use a mainstream Chrome UA.
 - **Engine tuning.** `OBSCURA_SCRIPT_DEADLINE_MS=60000`, `OBSCURA_MODULE_BUDGET_MS=15000`.
 - **Loader probes.** `18` accepts `SPIKE_HANDLER_CHUNK_FILE` or `SPIKE_HANDLER_CHUNK_URL` to inject a cached handler chunk for deferred-module experiments; injection is skipped on `--control` runs.
-- **Handler chunk.** `HANDLER_CHUNK_FILE=/tmp/wa-all/<hash>.js` with `33` installs the current build's `WAWebSetFrontendHandlerApi` resource as soon as the page loader is live. Without it the current build renders the QR shell but no QR canvas. `QR_TIMEOUT_MS` and `KEEP_STORAGE=1` are available for slow or reused profiles.
+- **Handler chunk.** `HANDLER_CHUNK_FILE=/tmp/wa-all/<hash>.js` with `33` installs the current build's `WAWebSetFrontendHandlerApi` resource as soon as the page loader is live. Without it the current build renders the QR shell but no QR canvas. Run `node spike/37-resolve-handler-chunk.mjs` to discover and cache it at `results/handler-chunk.js`; `33` uses that cache automatically. `QR_TIMEOUT_MS` and `KEEP_STORAGE=1` are available for slow or reused profiles.
 - **Periodic GC.** V8 grows at idle; call `HeapProfiler.collectGarbage` every 30 s. See `docs/operations/memory.md`.
 - **IDB.** In-memory, 64 MB cap, lost on restart. This is the persistence blocker.

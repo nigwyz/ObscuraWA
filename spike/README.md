@@ -65,5 +65,6 @@ UI_PORT=8787 node spike/34-qr-ui.mjs
 - **CDP serialization.** Obscura serves CDP commands one at a time per session. Never await a host binding from inside a `Runtime.evaluate` that the host itself must settle.
 - **UA.** WhatsApp serves a stripped legacy page to unrecognized/headless UAs; use a mainstream Chrome UA.
 - **Engine tuning.** `OBSCURA_SCRIPT_DEADLINE_MS=60000`, `OBSCURA_MODULE_BUDGET_MS=15000`.
+- **Loader probes.** `18` accepts `SPIKE_HANDLER_CHUNK_FILE` or `SPIKE_HANDLER_CHUNK_URL` to inject a cached handler chunk for deferred-module experiments; injection is skipped on `--control` runs.
 - **Periodic GC.** V8 grows at idle; call `HeapProfiler.collectGarbage` every 30 s. See `docs/operations/memory.md`.
 - **IDB.** In-memory, 64 MB cap, lost on restart. This is the persistence blocker.

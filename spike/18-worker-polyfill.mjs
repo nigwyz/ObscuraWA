@@ -124,6 +124,80 @@ try {
   out.gotoMs = nav.ok ? Date.now() - t0 : null;
   if (!nav.ok) throw new Error(`navigation failed: ${nav.v}`);
 
+  out.bootload = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const done = (v) => resolve(v);
+        setTimeout(() => done({ timeout: true }), 15000);
+        try {
+          const b = window.require('Bootloader');
+          b.loadModules(
+            ['WAWebSetFrontendHandlerApi'],
+            (mods) => {
+              const m = mods && mods.WAWebSetFrontendHandlerApi;
+              done({ ok: !!m, keys: m ? Object.keys(m).slice(0, 10) : null });
+            },
+            'obscura-probe',
+          );
+        } catch (e) {
+          done({ error: String(e.message || e) });
+        }
+      }),
+  ).catch((e) => ({ error: String(e.message || e) }));
+
+  out.loader = await page.evaluate(() => {
+    const r = {};
+    try {
+      const h = window.require('HasteSupportData') || {};
+      const keys = Object.keys(h);
+      r.hasteKeys = keys;
+      r.hasteKeyCount = keys.length;
+      const sample = {};
+      for (const k of keys.slice(0, 10)) sample[k] = h[k];
+      r.hasteSample = JSON.stringify(sample, (key, value) => {
+        if (typeof value === 'function') return '[function]';
+        if (typeof value === 'string' && value.length > 200) {
+          return `${value.slice(0, 200)}…`;
+        }
+        return value;
+      }).slice(0, 1200);
+    } catch (e) { r.hasteError = String(e.message || e); }
+    try {
+      const b = window.require('Bootloader');
+      r.bootKeys = Object.keys(b || {});
+    } catch (e) { r.bootError = String(e.message || e); }
+    r.dStub = window.__d_stub ? window.__d_stub.length : null;
+    r.rlStub = window.__rl_stub ? window.__rl_stub.length : null;
+    r.requireType = typeof window.require;
+    r.dType = typeof window.__d;
+    return r;
+  }).catch((e) => ({ error: String(e.message || e) }));
+
+  const handlerChunkFile = process.env.SPIKE_HANDLER_CHUNK_FILE;
+  if (handlerChunkFile && control) {
+    out.handlerChunkFileSkipped = 'control run';
+  } else if (handlerChunkFile) {
+    try {
+      const source = await readFile(handlerChunkFile, 'utf8');
+      await page.addScriptTag({ content: source });
+      out.handlerChunkFileInjected = true;
+    } catch (e) {
+      out.handlerChunkFileError = String(e.message || e);
+    }
+  }
+
+  const handlerChunk = process.env.SPIKE_HANDLER_CHUNK_URL;
+  if (handlerChunk) {
+    out.handlerChunk = handlerChunk.slice(0, 120);
+    const injected = await race(
+      page.addScriptTag({ url: handlerChunk }),
+      90_000,
+      'handler-chunk',
+    ).catch((e) => ({ ok: false, v: String(e.message || e) }));
+    if (injected.ok) out.handlerChunkInjected = true;
+    else out.handlerChunkError = String(injected.v);
+  }
+
   // Poll until QR or authenticated; stop early on a QR so the run is fast.
   const tBoot = Date.now();
   let snap = {};

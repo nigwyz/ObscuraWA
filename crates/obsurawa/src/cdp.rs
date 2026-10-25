@@ -325,6 +325,34 @@ impl PageSession {
             .context("decode screenshot")
     }
 
+    pub async fn screenshot_clip(
+        &self,
+        client: &CdpClient,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<Vec<u8>> {
+        let result = client
+            .send(
+                "Page.captureScreenshot",
+                json!({
+                    "format": "png",
+                    "clip": { "x": x, "y": y, "width": width, "height": height, "scale": 1 },
+                }),
+                Some(&self.session_id),
+            )
+            .await
+            .context("Page.captureScreenshot (clip)")?;
+        let data = result
+            .get("data")
+            .and_then(Value::as_str)
+            .context("Page.captureScreenshot returned no data")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .context("decode screenshot")
+    }
+
     pub async fn collect_garbage(&self, client: &CdpClient) -> Result<()> {
         client
             .send(

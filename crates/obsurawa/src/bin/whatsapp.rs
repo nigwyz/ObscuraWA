@@ -14,9 +14,13 @@ const STATE_EXPR: &str = r#"(() => {
   const qr = document.querySelector('div[data-testid="qrcode"]') || document.querySelector('canvas');
   const rect = qr ? qr.getBoundingClientRect() : null;
   const text = document.body?.innerText || '';
+  const hasQr = !!(rect && rect.width > 10 && rect.height > 10);
+  const scan = text.includes('Scan to log in');
+  const chatList = !!document.querySelector('#side, #pane-side, [data-testid="chat-list"], div[aria-label="Chat list"]');
   return {
-    hasQr: !!(rect && rect.width > 10 && rect.height > 10),
-    authenticated: !(rect && rect.width > 10) && !text.includes('Scan to log in'),
+    hasQr,
+    authenticated: !hasQr && !scan && (chatList || text.includes('Loading your chats')),
+    ready: chatList,
     bridgeStatus: window.__waBridgeStatus || null,
     bridgeErrors: (window.__waBridgeErrors || []).slice(0, 4),
     handler: (() => {

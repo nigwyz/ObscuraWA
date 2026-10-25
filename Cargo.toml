@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/obsurawa"]
+members = ["crates/obsurawa", "crates/whatsapp-web-rs"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,7 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
 futures-util = "0.3"

@@ -5,6 +5,7 @@
 - Add post-698 frame tracing (lengths/directions only) and `PairSuccess`/ready detection.
 - Separate `authenticated` (QR gone) from `ready` (chat list loaded).
 - Verify one real account reaches the chat list and survives a 5-minute idle.
+- **Status:** QR + full frontend bridge work in Rust; a phone scan is still needed.
 - **Gate:** login works, or the protocol backend becomes the default.
 
 ## M1 — `whatsapp-web-rs` facade + protocol backend
@@ -12,24 +13,28 @@
 - Rust workspace: `crates/whatsapp-web-rs`.
 - `Client`, `Event`, `Message`, `Chat`, `Contact`, `Backend` trait.
 - `ProtocolBackend` over `whatsapp-rust` (MIT): QR/pairing code, SQLite session, text send/receive, chat list.
+- **Status:** facade and `ObscuraBackend` are implemented; `ProtocolBackend` is not started.
 - **Gate:** send/receive text on a test number; restart and reconnect without QR.
 
 ## M2 — Preview UI
 
 - Axum server + static page: QR, state, chat list, message pane, send box, WebSocket events.
+- **Status:** QR, state, chat list, message pane and send box are implemented. The event stream is planned.
 - **Gate:** link, list chats, open a chat, send/receive text in the browser.
 
 ## M3 — Obscura backend parity
 
-- `ObscuraBackend` over the existing raw CDP client and WS bridge.
+- `ObscuraBackend` over the raw CDP client and WS bridge.
 - QR/login, chat list, message list, text send via page internals:
-  `WAWebChatCollection`, `WAWebMsgCollection`, `WAWebSendMsgChatAction`, `WAWebSendTextMsg`, `WAWebFindChatAction`, `WAWebWidFactory`.
+  `WAWebCollections`, `WAWebMsgKey`, `WAWebSendMsgChatAction`, `WAWebFindChatAction`.
+- **Status:** controller, QR, state, chat/message/send calls are implemented; verification needs login.
 - **Gate:** the same preview UI works with `BackendKind::Obscura`.
 
 ## M4 — Persistence
 
-- Disk-backed IndexedDB (redb) with a bounded LRU cache; remove the 64 MB in-memory cap.
+- Disk-backed IndexedDB with a bounded cache; remove the 64 MB in-memory cap.
 - Cookies/localStorage/auth state per tenant.
+- **Status:** `patches/obscura/0001-disk-backed-indexeddb.patch` adds JSON snapshots, a 2 s flush and a 256 MB cap. `spike/38` passes a restart round-trip; WhatsApp restart survival needs login.
 - **Gate:** clean restart and `kill -9` restart restore the session without QR.
 
 ## M5 — API parity

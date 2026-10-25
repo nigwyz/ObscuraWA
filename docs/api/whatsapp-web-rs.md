@@ -1,6 +1,16 @@
 # whatsapp-web.rs facade
 
-Proposed Rust API for the product. It mirrors the core of `whatsapp-web.js` and hides which backend is active.
+Rust API for the product. It mirrors the core of `whatsapp-web.js` and hides which backend is active. The first implementation is `ObscuraBackend`; the protocol backend is still a design option.
+
+## Status
+
+| Piece | State |
+|---|---|
+| `Client`, `Event`, `Message`, `Chat`, `Contact`, `State` | implemented |
+| `Backend` trait | implemented |
+| `ObscuraBackend` (engine + CDP + WebSocket bridge) | implemented |
+| QR, state, chat list, message list, text send | implemented, needs a logged-in account to verify |
+| `ProtocolBackend` (`whatsapp-rust`) | not implemented |
 
 ## Types
 
@@ -69,9 +79,9 @@ pub trait Backend: Send + Sync {
 ## Client
 
 ```rust
-let client = Client::builder()
-    .backend(BackendKind::Protocol) // or BackendKind::Obscura
-    .storage("./data/tenant-1")
+use whatsapp_web_rs::{BackendKind, ClientBuilder};
+
+let mut client = ClientBuilder::new(BackendKind::Obscura, "./data/tenant-1")
     .build()
     .await?;
 
@@ -80,7 +90,13 @@ client.initialize().await?;
 client.send_text("123@s.whatsapp.net", "hello").await?;
 ```
 
-Events are delivered over `tokio::sync::broadcast`. `initialize` is idempotent; `destroy` releases the engine/process and storage handles.
+`Client::obscura(storage)` is the short form. `BackendKind` currently has
+`Obscura` only; `Protocol` remains a design option.
+
+Events are delivered over `tokio::sync::broadcast`. `initialize` is idempotent;
+`destroy` releases the engine process and storage handles. `qr()` returns a
+`data:image/png;base64,...` URL so the preview can render it without a second
+screenshot call.
 
 ## Preview API
 
@@ -88,24 +104,25 @@ The preview server (Axum) exposes:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | backend, state, QR presence |
+| `GET` | `/api/state` | state, QR presence, bridge status |
 | `GET` | `/api/qr` | PNG or 404 |
 | `GET` | `/api/chats` | chat list |
 | `GET` | `/api/chats/:id/messages?limit=` | recent messages |
 | `POST` | `/api/send` | `{ chat_id, text }` |
-| `GET` | `/ws` | events (`qr`, `ready`, `message`, `disconnected`) |
+| `GET` | `/ws` | planned event stream |
 
-Bind to `127.0.0.1` by default; no auth in the local preview.
+Bind to `127.0.0.1` by default; no auth in the local preview. Chat and message
+endpoints return `{ "error": "..." }` until the page reports `ready`.
 
 ## Backend behavior
 
 | Capability | ProtocolBackend | ObscuraBackend |
 |---|---|---|
-| QR / pairing code | yes | QR only initially |
-| Persistent session | SQLite | cookies/localStorage; IDB pending |
-| Text messaging | yes | page internals, later |
-| History sync | yes | page state |
-| Memory | low | 210–280 MB engine+controller |
+| QR / pairing code | planned | yes |
+| Persistent session | planned (SQLite) | cookies/localStorage + patched IndexedDB |
+| Text messaging | planned | page internals, implemented, needs login |
+| History sync | planned | page state |
+| Memory | low | ~200 MB engine + small Rust controller |
 | Fidelity | protocol | real page |
 
 ## Non-goals for the first API

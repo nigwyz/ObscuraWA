@@ -8,12 +8,12 @@ Run real WhatsApp Web inside [Obscura](https://github.com/h4ckf0r0day/obscura), 
 |---|---|
 | WhatsApp Web boots on Obscura | ✅ |
 | Noise handshake + real QR | ✅ `43 → 350 → 363 → 698 → 37 → 93 → 66` |
-| Raw CDP controller (no Puppeteer) | ✅ |
-| Local QR preview UI | ✅ |
-| Login / linked device | ⚠️ not verified |
-| Session persistence | ❌ IndexedDB is in-memory |
-| Send/receive messages | ❌ |
-| `whatsapp-web.rs` API | ❌ |
+| Raw CDP controller (no Puppeteer) | ✅ Node spike and Rust `obsurawa` |
+| Local QR preview UI | ✅ Node and Rust preview |
+| Login / linked device | ⚠️ needs a phone scan |
+| Session persistence | ⚠️ patched engine; IndexedDB restart verified, WhatsApp restart pending |
+| Send/receive messages | ⚠️ API implemented, needs a logged-in account |
+| `whatsapp-web.rs` API | ✅ `whatsapp-web-rs` facade + `ObscuraBackend` |
 | Multi-tenant | ❌ |
 
 This repository is currently a **working feasibility spike**, not a shipping WhatsApp client.
@@ -46,6 +46,25 @@ UI_PORT=8787 node spike/34-qr-ui.mjs
 
 Override the engine with `OBSCURA_BIN=/path/to/obscura`. Results are written to `results/` and are gitignored.
 
+### Rust controller (product path)
+
+```bash
+# One-time: clone/patch/build Obscura with disk-backed IndexedDB
+scripts/build-obscura.sh
+export OBSCURA_BIN="$PWD/vendor/obscura/target/release/obscura"
+
+# One-time per WhatsApp build: cache the handler chunk
+node spike/37-resolve-handler-chunk.mjs
+
+# Run the Rust preview
+cargo run -p obsurawa --bin preview
+# open http://127.0.0.1:8787/
+```
+
+`PREVIEW_PORT` and `OBSCURA_STORAGE` override the defaults. With the patched
+engine the session's IndexedDB is snapshotted to
+`{storage-dir}/indexeddb.json`; see [patches/obscura/README.md](patches/obscura/README.md).
+
 The older Puppeteer-based live path is `spike/27-qr-live.mjs`; it is superseded by `33`.
 
 ## Repository layout
@@ -54,14 +73,19 @@ The older Puppeteer-based live path is `spike/27-qr-live.mjs`; it is superseded 
 docs/adr/          architecture decisions
 docs/api/          whatsapp-web.rs facade spec
 docs/operations/   memory and multi-tenant notes
+crates/obsurawa/   Rust engine supervisor, CDP client, WebSocket bridge, preview
+crates/whatsapp-web-rs/  Rust facade types and ObscuraBackend
+patches/obscura/   disk-backed IndexedDB patch and build notes
+scripts/           build helpers
 spike/             feasibility scripts and diagnostics
 spike/lib/         worker, bridge, CDP and WS shims
 results/           local evidence (gitignored)
 sessions/          WhatsApp session material (never commit)
-vendor/            local reference clones (never commit)
+vendor/            local reference clones and patched engine (never commit)
 ```
 
-The Rust product crates (`crates/whatsapp-web-rs`, `crates/obsurawa`, `crates/preview`) are planned in [ROADMAP.md](ROADMAP.md) and [docs/adr/0003-backend-architecture.md](docs/adr/0003-backend-architecture.md); they do not exist yet.
+The Rust crates are real now; the Node spike remains the fastest way to test a
+page or loader change.
 
 ## Documents
 
@@ -71,6 +95,7 @@ The Rust product crates (`crates/whatsapp-web-rs`, `crates/obsurawa`, `crates/pr
 - [SECURITY.md](SECURITY.md) — local UI, session data, ToS risk
 - [docs/adr/0002-real-qr-bridge.md](docs/adr/0002-real-qr-bridge.md) — the bridge workaround
 - [docs/adr/0003-backend-architecture.md](docs/adr/0003-backend-architecture.md) — protocol vs Obscura backend
+- [patches/obscura/README.md](patches/obscura/README.md) — disk-backed IndexedDB patch
 
 ## Security
 

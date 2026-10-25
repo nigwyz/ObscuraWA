@@ -1,0 +1,229 @@
+diff --git a/crates/obscura-browser/src/context.rs b/crates/obscura-browser/src/context.rs
+index 0267402..ea3c8f9 100644
+--- a/crates/obscura-browser/src/context.rs
++++ b/crates/obscura-browser/src/context.rs
+@@ -202,7 +202,9 @@ impl BrowserContext {
+             id,
+             cookie_jar,
+             local_storage,
+-            indexed_db: Arc::new(obscura_js::indexed_db::IndexedDbStorage::default()),
++            indexed_db: Arc::new(obscura_js::indexed_db::IndexedDbStorage::new(
++                storage_dir.as_ref().map(|dir| dir.join("indexeddb.json")),
++            )),
+             http_client,
+             user_agent: resolved_ua,
+             platform,
+@@ -334,6 +336,9 @@ impl BrowserContext {
+     pub fn save_storage(&self) {
+         self.save_local_storage();
+         self.save_cookies();
++        if let Err(error) = self.indexed_db.flush() {
++            tracing::warn!("Failed to persist IndexedDB: {error}");
++        }
+     }
+ 
+     /// Persist cookies to disk if storage_dir is configured.
+diff --git a/crates/obscura-js/src/indexed_db.rs b/crates/obscura-js/src/indexed_db.rs
+index a52a761..bc3f499 100644
+--- a/crates/obscura-js/src/indexed_db.rs
++++ b/crates/obscura-js/src/indexed_db.rs
+@@ -1,9 +1,13 @@
+ //! Context-owned IndexedDB records. Transactions stage deltas, not copies of a database.
+ use std::collections::{HashMap, HashSet, VecDeque};
++use std::path::{Path, PathBuf};
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, Mutex};
++use std::time::Duration;
++use serde::{Deserialize, Serialize};
+ use serde_json::{json, Value};
+ 
+-const MAX_BYTES: usize = 64 * 1024 * 1024;
++const MAX_BYTES: usize = 256 * 1024 * 1024;
+ const MAX_HANDLES: usize = 1024;
+ const RECORD_OVERHEAD: usize = 96;
+ type DatabaseKey = (String, String);
+@@ -39,15 +43,88 @@ struct Inner {
+     notices: HashMap<u64, Vec<Value>>,
+ }
+ 
+-#[derive(Default)]
+ pub struct IndexedDbStorage {
+-    inner: Mutex<Inner>,
+-    pending_notices: std::sync::atomic::AtomicBool,
++    inner: Arc<Mutex<Inner>>,
++    pending_notices: AtomicBool,
++    path: Option<PathBuf>,
++    dirty: Arc<AtomicBool>,
++}
++
++impl Default for IndexedDbStorage {
++    fn default() -> Self {
++        Self::new(None)
++    }
+ }
+ 
+ impl IndexedDbStorage {
++    pub fn new(path: Option<PathBuf>) -> Self {
++        let inner = path
++            .as_deref()
++            .and_then(|path| match load_snapshot(path) {
++                Ok(inner) => Some(inner),
++                Err(error) => {
++                    tracing::warn!(
++                        "Could not load IndexedDB snapshot {}: {error}",
++                        path.display()
++                    );
++                    None
++                }
++            })
++            .unwrap_or_default();
++        let inner = Arc::new(Mutex::new(inner));
++        let dirty = Arc::new(AtomicBool::new(false));
++
++        if let Some(path) = path.clone() {
++            let weak = Arc::downgrade(&inner);
++            let dirty_thread = dirty.clone();
++            std::thread::spawn(move || loop {
++                std::thread::sleep(Duration::from_secs(2));
++                let Some(inner) = weak.upgrade() else {
++                    break;
++                };
++                if dirty_thread.swap(false, Ordering::AcqRel) {
++                    if let Err(error) = write_snapshot(&path, &inner) {
++                        tracing::warn!(
++                            "Could not flush IndexedDB snapshot {}: {error}",
++                            path.display()
++                        );
++                        dirty_thread.store(true, Ordering::Release);
++                    }
++                }
++            });
++        }
++
++        Self {
++            inner,
++            pending_notices: AtomicBool::new(false),
++            path,
++            dirty,
++        }
++    }
++
+     pub fn has_pending_notifications(&self) -> bool {
+-        self.pending_notices.load(std::sync::atomic::Ordering::Acquire)
++        self.pending_notices.load(Ordering::Acquire)
++    }
++
++    /// Write the current snapshot immediately. The periodic flusher covers
++    /// normal operation; this is for graceful shutdown and tests.
++    pub fn flush(&self) -> std::io::Result<()> {
++        let Some(path) = &self.path else {
++            return Ok(());
++        };
++        write_snapshot(path, &self.inner)?;
++        self.dirty.store(false, Ordering::Release);
++        Ok(())
++    }
++
++    pub fn is_dirty(&self) -> bool {
++        self.dirty.load(Ordering::Acquire)
++    }
++}
++
++impl Drop for IndexedDbStorage {
++    fn drop(&mut self) {
++        let _ = self.flush();
+     }
+ }
+ 
+@@ -69,6 +146,9 @@ impl IndexedDbOwner {
+     pub(crate) fn command(&self, origin: &str, action: &str, data: Value) -> Value {
+         let mut inner = self.storage.inner.lock().unwrap_or_else(|e| e.into_inner());
+         let result = inner.command(self.id, origin, action, data);
++        if result.is_ok() && matches!(action, "commit" | "delete" | "open_ready") {
++            self.storage.dirty.store(true, Ordering::Release);
++        }
+         self.storage.pending_notices.store(!inner.notices.is_empty(), std::sync::atomic::Ordering::Release);
+         match result {
+             Ok(value) => value,
+@@ -106,6 +186,81 @@ fn text<'a>(data: &'a Value, key: &str) -> Result<&'a str, &'static str> {
+     data.get(key).and_then(Value::as_str).ok_or("DataError")
+ }
+ 
++#[derive(Serialize, Deserialize)]
++struct Snapshot {
++    databases: Vec<SnapshotDatabase>,
++}
++
++#[derive(Serialize, Deserialize)]
++struct SnapshotDatabase {
++    origin: String,
++    name: String,
++    version: u64,
++    #[serde(default)]
++    schema: Vec<Value>,
++    #[serde(default)]
++    records: HashMap<String, HashMap<String, String>>,
++}
++
++fn load_snapshot(path: &Path) -> std::io::Result<Inner> {
++    let bytes = std::fs::read(path)?;
++    let snapshot: Snapshot =
++        serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
++    let mut inner = Inner::default();
++    for database in snapshot.databases {
++        let schema_bytes = database
++            .schema
++            .iter()
++            .map(|value| value.to_string().len())
++            .sum::<usize>();
++        let record_bytes = database
++            .records
++            .values()
++            .flat_map(|store| store.iter())
++            .map(|(key, value)| key.len() + value.len() + RECORD_OVERHEAD)
++            .sum::<usize>();
++        inner.bytes = inner.bytes.saturating_add(schema_bytes + record_bytes);
++        inner.databases.insert(
++            (database.origin, database.name),
++            Database {
++                version: database.version,
++                schema: database.schema,
++                records: database.records,
++                schema_bytes,
++                ..Default::default()
++            },
++        );
++    }
++    Ok(inner)
++}
++
++fn write_snapshot(path: &Path, inner: &Arc<Mutex<Inner>>) -> std::io::Result<()> {
++    let snapshot = {
++        let inner = inner.lock().unwrap_or_else(|error| error.into_inner());
++        Snapshot {
++            databases: inner
++                .databases
++                .iter()
++                .map(|((origin, name), database)| SnapshotDatabase {
++                    origin: origin.clone(),
++                    name: name.clone(),
++                    version: database.version,
++                    schema: database.schema.clone(),
++                    records: database.records.clone(),
++                })
++                .collect(),
++        }
++    };
++    let bytes = serde_json::to_vec(&snapshot).map_err(std::io::Error::other)?;
++    if let Some(parent) = path.parent() {
++        std::fs::create_dir_all(parent)?;
++    }
++    let temporary = path.with_extension("json.tmp");
++    std::fs::write(&temporary, bytes)?;
++    std::fs::rename(&temporary, path)?;
++    Ok(())
++}
++
+ impl Inner {
+     fn command(&mut self, owner: u64, origin: &str, action: &str, data: Value) -> Result<Value, &'static str> {
+         if origin == "null" { return Err("SecurityError"); }

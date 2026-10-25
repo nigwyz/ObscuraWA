@@ -62,7 +62,9 @@ See [operations/memory.md](docs/operations/memory.md).
 
 ## Storage
 
-Obscura persists `cookies.json` and `localStorage/*.json`. **IndexedDB is in-memory only**, capped at 64 MB, and lost on restart (`crates/obscura-js/src/indexed_db.rs` in the engine source). WhatsApp keeps its Signal keys and app state in IndexedDB, so login will not survive a restart until storage is disk-backed. This is the main persistence blocker.
+Obscura persists `cookies.json` and `localStorage/*.json`. The released engine (0.2.5) keeps **IndexedDB in memory**, capped at 64 MB, and loses it on restart. WhatsApp keeps its Signal keys and app state in IndexedDB, so login does not survive a restart on the stock binary.
+
+[patches/obscura/0001-disk-backed-indexeddb.patch](patches/obscura/0001-disk-backed-indexeddb.patch) adds a JSON snapshot at `{storage-dir}/indexeddb.json`: load on context creation, dirty flags on `open_ready`/`commit`/`delete`, a 2 s flusher, and flush on `save_storage`/drop. It also raises the cap to 256 MB. `spike/38-idb-persistence.mjs` verifies the round-trip on `example.com`; WhatsApp restart survival still needs a logged-in account. See [patches/obscura/README.md](patches/obscura/README.md).
 
 ## Controller
 

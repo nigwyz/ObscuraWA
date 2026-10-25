@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ObscuraWA</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0b141a; color: #e9edef;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: min(96vw, 760px); margin: 0 auto; padding: 28px 18px 48px; }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 650; }
+  .sub { margin: 0 0 20px; color: #8696a0; font-size: 13px; }
+  #status { margin: 0 0 16px; color: #00a884; font-weight: 600; min-height: 22px; }
+  #qr { display: none; width: min(78vw, 320px); image-rendering: pixelated;
+    border-radius: 12px; background: #fff; padding: 10px; }
+  #details { margin-top: 16px; color: #8696a0; font-size: 12px; white-space: pre-wrap; }
+  #client { display: none; }
+  .columns { display: grid; grid-template-columns: 220px 1fr; gap: 12px; min-height: 50vh; }
+  #chats { border: 1px solid #22343c; border-radius: 12px; overflow: auto; max-height: 60vh; }
+  .chat { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0;
+    border-bottom: 1px solid #1b2b32; background: transparent; color: #e9edef; cursor: pointer; }
+  .chat:hover, .chat.active { background: #111f26; }
+  .chat .name { font-weight: 600; font-size: 13px; }
+  .chat .last { color: #8696a0; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pane { display: flex; flex-direction: column; border: 1px solid #22343c; border-radius: 12px; min-height: 50vh; }
+  #messages { flex: 1; overflow: auto; padding: 12px; max-height: 52vh; }
+  .msg { margin: 4px 0; padding: 7px 10px; border-radius: 9px; max-width: 82%;
+    font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .msg.in { background: #202c33; }
+  .msg.out { background: #005c4b; margin-left: auto; }
+  #send { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #22343c; }
+  #text { flex: 1; padding: 9px 11px; border-radius: 9px; border: 1px solid #2a3b43;
+    background: #111b21; color: #e9edef; font: inherit; }
+  #send button { padding: 9px 14px; border: 0; border-radius: 9px; background: #00a884; color: #071a16;
+    font-weight: 700; cursor: pointer; }
+  #paneTitle { padding: 10px 12px; border-bottom: 1px solid #22343c; color: #8696a0; font-size: 12px; }
+  @media (max-width: 600px) { .columns { grid-template-columns: 1fr; } #chats { max-height: 28vh; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>ObscuraWA</h1>
+  <p class="sub">Real WhatsApp Web in Obscura — no Chromium</p>
+  <p id="status">starting…</p>
+  <img id="qr" alt="WhatsApp QR code">
+  <div id="details"></div>
+
+  <section id="client">
+    <div class="columns">
+      <div id="chats"></div>
+      <div id="pane">
+        <div id="paneTitle">Select a chat</div>
+        <div id="messages"></div>
+        <form id="send">
+          <input id="text" placeholder="Type a message" autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+  const statusEl = document.getElementById('status');
+  const qrEl = document.getElementById('qr');
+  const detailsEl = document.getElementById('details');
+  const clientEl = document.getElementById('client');
+  const chatsEl = document.getElementById('chats');
+  const messagesEl = document.getElementById('messages');
+  const paneTitle = document.getElementById('paneTitle');
+  const sendForm = document.getElementById('send');
+  const textEl = document.getElementById('text');
+
+  let lastQr = 0;
+  let currentChat = null;
+  let loadedReady = false;
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  }
+
+  async function loadChats() {
+    let chats = [];
+    try { chats = await fetch('/api/chats', { cache: 'no-store' }).then((r) => r.json()); }
+    catch (e) { return; }
+    if (!Array.isArray(chats)) chats = [];
+    chatsEl.innerHTML = '';
+    for (const chat of chats.slice(0, 200)) {
+      const button = document.createElement('button');
+      button.className = 'chat';
+      button.innerHTML = `<div class="name">${esc(chat.name || chat.id)}</div>
+        <div class="last">${esc(chat.lastMessage || '')}</div>`;
+      button.onclick = () => openChat(chat);
+      button.dataset.id = chat.id;
+      chatsEl.appendChild(button);
+    }
+    if (!chats.length) chatsEl.textContent = 'No chats yet';
+  }
+
+  async function openChat(chat) {
+    currentChat = chat.id;
+    paneTitle.textContent = chat.name || chat.id;
+    for (const el of chatsEl.querySelectorAll('.chat')) {
+      el.classList.toggle('active', el.dataset.id === chat.id);
+    }
+    await loadMessages();
+  }
+
+  async function loadMessages() {
+    if (!currentChat) return;
+    let messages = [];
+    try {
+      messages = await fetch(
+        `/api/chats/${encodeURIComponent(currentChat)}/messages?limit=50`,
+        { cache: 'no-store' },
+      ).then((r) => r.json());
+    } catch (e) { messages = []; }
+    if (!Array.isArray(messages)) messages = [];
+    messagesEl.innerHTML = '';
+    for (const message of messages) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (message.fromMe ? 'out' : 'in');
+      div.textContent = message.body || (message.hasMedia ? '[media]' : '');
+      messagesEl.appendChild(div);
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  sendForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const text = textEl.value.trim();
+    if (!currentChat || !text) return;
+    textEl.value = '';
+    try {
+      await fetch('/api/send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: currentChat, text }),
+      });
+    } catch (e) { /* the next poll will show the error state */ }
+    await loadMessages();
+  };
+
+  async function tick() {
+    let state = null;
+    try { state = await fetch('/api/state', { cache: 'no-store' }).then((r) => r.json()); }
+    catch (e) { statusEl.textContent = 'engine unavailable'; return; }
+
+    if (state.error) {
+      statusEl.textContent = 'error: ' + state.error;
+      return;
+    }
+
+    if (state.hasQr) {
+      statusEl.textContent = 'Scan the QR with your phone';
+      qrEl.style.display = 'block';
+      clientEl.style.display = 'none';
+      loadedReady = false;
+      if (Date.now() - lastQr > 2000) {
+        lastQr = Date.now();
+        qrEl.src = '/api/qr?t=' + lastQr;
+      }
+    } else if (state.ready) {
+      statusEl.textContent = 'Connected';
+      qrEl.style.display = 'none';
+      clientEl.style.display = 'block';
+      if (!loadedReady) {
+        loadedReady = true;
+        loadChats();
+      }
+    } else {
+      qrEl.style.display = 'none';
+      clientEl.style.display = 'none';
+      statusEl.textContent = state.authenticated ? 'Loading your chats…' : 'Waiting for WhatsApp Web';
+    }
+
+    detailsEl.textContent = [
+      'bridge: ' + (state.bridgeStatus || 'unknown'),
+      'authenticated: ' + state.authenticated,
+      'ready: ' + state.ready,
+    ].join('  ·  ');
+  }
+
+  tick();
+  setInterval(tick, 1500);
+  setInterval(() => { if (loadedReady) loadMessages(); }, 5000);
+</script>
+</body>
+</html>

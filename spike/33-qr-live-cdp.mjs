@@ -20,11 +20,15 @@ const LOGIN_PATH = process.env.LOGIN_PATH ?? '/tmp/ObscuraWA-logged-in.png';
 const resultsDir = new URL('../results/', import.meta.url).pathname;
 const storageDir = `${resultsDir}storage-33`;
 await mkdir(resultsDir, { recursive: true });
-await rm(storageDir, { recursive: true, force: true });
+if (process.env.KEEP_STORAGE !== '1') {
+  await rm(storageDir, { recursive: true, force: true });
+}
 
 const workerSource = await readFile(new URL('./lib/worker-polyfill.js', import.meta.url), 'utf8');
 const wsShimSource = await readFile(new URL('./lib/ws-shim.js', import.meta.url), 'utf8');
 const bridgeSource = await readFile(new URL('./lib/wa-bridge.js', import.meta.url), 'utf8');
+const handlerChunkFile = process.env.HANDLER_CHUNK_FILE;
+const handlerChunkSource = handlerChunkFile ? await readFile(handlerChunkFile, 'utf8') : null;
 
 async function memTree(rootPid) {
   const { readdir } = await import('node:fs/promises');
@@ -107,6 +111,12 @@ try {
   await cdp.addScript(sessionId, WS_ADAPTER);
   await cdp.addScript(sessionId, wsShimSource);
   await cdp.addScript(sessionId, workerSource);
+  if (handlerChunkSource) {
+    await cdp.addScript(
+      sessionId,
+      `window.__waHandlerChunkSource = ${JSON.stringify(handlerChunkSource)};`,
+    );
+  }
   await cdp.addScript(sessionId, bridgeSource);
 
   cdp.on('Runtime.exceptionThrown', (p) => {
@@ -122,14 +132,30 @@ try {
 
   await cdp.navigate(sessionId, 'https://web.whatsapp.com/');
 
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + Number(process.env.QR_TIMEOUT_MS ?? 90_000);
   let state = {};
   while (Date.now() < deadline) {
     state = await cdp.evaluate(sessionId, stateExpr).catch(() => ({}));
     if (state.hasQr || state.authenticated) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  if (!state.hasQr && !state.authenticated) throw new Error('no QR within 45s');
+  if (!state.hasQr && !state.authenticated) {
+    out.timeoutState = await cdp
+      .evaluate(
+        sessionId,
+        `(() => ({
+          readyState: document.readyState,
+          canvases: document.querySelectorAll('canvas').length,
+          images: document.querySelectorAll('img').length,
+          qrNodes: document.querySelectorAll('[data-testid="qrcode"]').length,
+          text: (document.body?.innerText || '').slice(0, 500),
+        }))()`,
+      )
+      .catch(() => null);
+    const png = await cdp.screenshot(sessionId).catch(() => null);
+    if (png) await writeFile('/tmp/ObscuraWA-33-timeout.png', png);
+    throw new Error(`no QR within ${process.env.QR_TIMEOUT_MS ?? 90_000}ms`);
+  }
 
   const saveQr = async () => {
     const box = await cdp.evaluate(sessionId, boxExpr).catch(() => null);
@@ -147,6 +173,36 @@ try {
     await writeFile('/tmp/ObscuraWA-status.txt', 'qr-live\n');
     console.log(`QR live: ${QR_PATH}`);
     startMemoryKeeper(cdp, { intervalMs: 30_000, delayMs: 5_000 });
+  }
+
+  if (handlerChunkSource) {
+    out.handlerChunk = await cdp
+      .evaluate(
+        sessionId,
+        `(() => {
+          if (!window.__waHandlerChunkInjected) {
+            const script = document.createElement('script');
+            script.textContent = ${JSON.stringify(handlerChunkSource)};
+            document.head.appendChild(script);
+            window.__waHandlerChunkInjected = true;
+            window.__waHandlerChunkStatus = 'fallback';
+          }
+          return {
+            status: window.__waHandlerChunkStatus || null,
+            handler: (() => {
+              try { return typeof window.require('WAWebSetFrontendHandlerApi') === 'object'; }
+              catch (e) { return false; }
+            })(),
+            deviceInfo: (() => {
+              try { return typeof window.require('WAWebDeviceInfoBridgeApi') === 'object'; }
+              catch (e) { return false; }
+            })(),
+          };
+        })()`,
+      )
+      .catch((e) => ({ error: String(e.message || e) }));
+    console.log('handler chunk:', JSON.stringify(out.handlerChunk));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
   if (process.env.SPIKE_FULL_BRIDGE !== '0') {

@@ -32,6 +32,25 @@
     return true;
   }
 
+  var handlerChunkDone = false;
+  function installHandlerChunk() {
+    if (handlerChunkDone) return;
+    var source = window.__waHandlerChunkSource;
+    if (!source || typeof source !== 'string') return;
+    if (typeof window.require !== 'function' || typeof window.__d !== 'function') return;
+    try {
+      var script = document.createElement('script');
+      script.textContent = source;
+      (document.head || document.documentElement).appendChild(script);
+      handlerChunkDone = true;
+      window.__waHandlerChunkInjected = true;
+      window.__waHandlerChunkStatus = 'injected';
+    } catch (e) {
+      note(e);
+      window.__waHandlerChunkStatus = 'error';
+    }
+  }
+
   var aliasDone = false;
   function installAlias() {
     if (aliasDone || typeof window.__d !== 'function') return;
@@ -178,6 +197,7 @@
   setInterval(function () {
     try {
       installDefineWrapper();
+      installHandlerChunk();
       installAlias();
       installStubs();
       wrapSetApi();

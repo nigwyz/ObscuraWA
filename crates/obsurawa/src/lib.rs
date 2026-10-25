@@ -1,5 +1,6 @@
 //! Rust controller for running WhatsApp Web inside Obscura.
 
+pub mod bridge;
 pub mod cdp;
 pub mod process;
 
